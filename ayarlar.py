@@ -39,7 +39,9 @@ def veritabani_kur():
     cursor.execute('''CREATE TABLE IF NOT EXISTS kullanici_ekonomi 
                       (chat_id BIGINT, user_id BIGINT, bakiye INTEGER DEFAULT 1000, PRIMARY KEY (chat_id, user_id))''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS grup_ayarlar 
-                      (chat_id BIGINT PRIMARY KEY, gece_modu_aktif BOOLEAN DEFAULT FALSE, dil TEXT DEFAULT 'TR')''')
+                      (chat_id BIGINT PRIMARY KEY, gece_modu_aktif BOOLEAN DEFAULT FALSE, dil TEXT DEFAULT 'TR',
+                       reklam_filtresi BOOLEAN DEFAULT TRUE, kufur_filtresi BOOLEAN DEFAULT TRUE,
+                       rpg_aktif BOOLEAN DEFAULT TRUE, kumar_aktif BOOLEAN DEFAULT TRUE)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS grup_mesaj_log 
                       (chat_id BIGINT, user_name TEXT, mesaj TEXT, tarih TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS referanslar 
@@ -79,7 +81,7 @@ def yasakli_listesi_getir():
     conn = baglanti()
     cursor = conn.cursor()
     cursor.execute("SELECT kelime FROM yasakli_kelimeler")
-    kelimeler = [row[0] for row in cursor.fetchall()]
+    kelimeler = [row for row in cursor.fetchall()]
     conn.close()
     return kelimeler
 
@@ -157,7 +159,7 @@ def bakiye_getir(chat_id, user_id):
         cursor.execute("INSERT OR IGNORE INTO kullanici_ekonomi VALUES (?, ?, 1000)", (chat_id, user_id))
         conn.commit()
         bakiye = 1000
-    else: bakiye = veri[0]
+    else: bakiye = veri
     conn.close()
     return bakiye
 
@@ -182,7 +184,7 @@ def gece_modu_durum(chat_id):
     cursor.execute("SELECT gece_modu_aktif FROM grup_ayarlar WHERE chat_id = ?", (chat_id,))
     veri = cursor.fetchone()
     conn.close()
-    return veri[0] if veri else False
+    return veri if veri else False
 
 def dil_guncelle(chat_id, yeni_dil):
     conn = baglanti()
@@ -197,7 +199,27 @@ def dil_getir(chat_id):
     cursor.execute("SELECT dil FROM grup_ayarlar WHERE chat_id = ?", (chat_id,))
     veri = cursor.fetchone()
     conn.close()
-    return veri[0] if veri else "TR"
+    return veri if veri else "TR"
+
+def grup_ayar_getir(chat_id):
+    conn = baglanti()
+    cursor = conn.cursor()
+    cursor.execute("SELECT reklam_filtresi, kufur_filtresi, rpg_aktif, kumar_aktif FROM grup_ayarlar WHERE chat_id = ?", (chat_id,))
+    veri = cursor.fetchone()
+    if not veri:
+        cursor.execute("INSERT INTO grup_ayarlar (chat_id, reklam_filtresi, kufur_filtresi, rpg_aktif, kumar_aktif) VALUES (?, True, True, True, True)", (chat_id,))
+        conn.commit()
+        veri = (True, True, True, True)
+    conn.close()
+    return veri
+
+def grup_ayar_guncelle(chat_id, sutun_adi, yeni_durum):
+    conn = baglanti()
+    cursor = conn.cursor()
+    if sutun_adi in ["reklam_filtresi", "kufur_filtresi", "rpg_aktif", "kumar_aktif"]:
+        cursor.execute(f"UPDATE grup_ayarlar SET {sutun_adi} = ? WHERE chat_id = ?", (yeni_durum, chat_id))
+        conn.commit()
+    conn.close()
 
 def mesaj_logla(chat_id, user_name, mesaj):
     conn = baglanti()
@@ -270,7 +292,7 @@ def blackjack_kart_degeri(kartlar):
     toplam = 0
     as_sayisi = 0
     for kart in kartlar:
-        deger = kart.split()[0]
+        deger = kart.split()
         if deger in ["J", "Q", "K"]: toplam += 10
         elif deger == "A": as_sayisi += 1; toplam += 11
         else: toplam += int(deger)
