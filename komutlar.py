@@ -95,7 +95,7 @@ async def start_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     ayarlar.kullanici_kaydet(user.id, user.username, user.first_name)
     dil = ayarlar.dil_getir(chat.id)
-    mesaj = METINLER[dil]["start"].format(user.first_name) + "\n\n🌤️ /hava [şehir]\n💰 /doviz\n📊 /kripto\n⚽ /iddaa\n🌐 /dil\n📋 /banlist"
+    mesaj = METINLER[dil]["start"].format(user.first_name) + "\n\n🌤️ /hava [şehir]\n💰 /doviz\n📊 /kripto\n⚽ /iddaa\n🌐 /dil\n📋 /banlist\n🛠️ /panel"
     await update.message.reply_text(mesaj)
 
 async def dil_degistir_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -180,16 +180,18 @@ async def kripto_analiz_komutu(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("❌ Veri hatası kanka. Çifti doğru yazdığından emin ol (Örn: BTC, ETH).")
 
 async def iddaa_analiz_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat = update.effective_chat
+    if chat.type == "private": return
     if not context.args:
-        await update.message.reply_text("⚠️ Kanka analiz edilecek maçları yazmadın!")
+        await update.message.reply_text("⚠️ Kanka analiz edilecek maçları yazmadın! Örnek: `/iddaa Fenerbahçe - Galatasaray`")
         return
     mac_bilgisi = " ".join(context.args)
-    await update.message.reply_text("⚽ Yapay zeka takımları analiz ediyor, bekleyin...")
-    try:
-        istemi = f"Kullanıcı şu maç hakkında yorum istiyor: {mac_bilgisi}. Kesin kupon vaat etmeden samimi, kanka tarzı eğlenceli 2 tahmin yürüt. Sonuna sorumluluk reddi uyarısı ekle."
-        response = ayarlar.ai_client.models.generate_content(model='gemini-2.5-flash', contents=istemi)
-        await update.message.reply_text(response.text)
-    except: pass
+    klavye = [[InlineKeyboardButton("🔍 MAÇI TARA", callback_data=f"iddaa_tara_{mac_bilgisi[:50]}")]]
+    await update.message.reply_text(
+        f"⚽ **İDDAA MAÇ ANALİZ MASASI** ⚽\n\n🏟️ **Maç:** {mac_bilgisi}\n👤 **İsteyen:** @{update.effective_user.username}\n\n"
+        f"Yapay zeka analiz motorunu çalıştırmak için aşağıdaki butona basın kanka! 👇",
+        reply_markup=InlineKeyboardMarkup(klavye)
+    )
 async def en_aktifler_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     dil = ayarlar.dil_getir(chat.id)
@@ -209,6 +211,10 @@ async def bakiye_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     user = update.effective_user
     if chat.type == "private": return
+    _, _, _, kumar_aktif = ayarlar.grup_ayar_getir(chat.id)
+    if not kumar_aktif:
+        await update.message.reply_text("❌ Bu grupta kumar/casino özellikleri admin tarafından kapatılmıştır kanka.")
+        return
     bakiye = ayarlar.bakiye_getir(chat.id, user.id)
     await update.message.reply_text(f"💰 {user.first_name}, bakiyen: **{bakiye} KankaCoin**", parse_mode="Markdown")
 
@@ -217,6 +223,10 @@ async def slot_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     dil = ayarlar.dil_getir(chat.id)
     if chat.type == "private" or not context.args: return
+    _, _, _, kumar_aktif = ayarlar.grup_ayar_getir(chat.id)
+    if not kumar_aktif:
+        await update.message.reply_text("❌ Bu grupta kumar/casino özellikleri admin tarafından kapatılmıştır kanka.")
+        return
     try:
         bahis = int(context.args[0])
         if bahis <= 0: return
@@ -274,11 +284,14 @@ async def davetler_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         link = f"@{uname}" if uname else ad
         mesaj += f"{i+1}. 👤 {link} ➡️ **{adet} Davet**\n"
     await update.message.reply_text(mesaj, parse_mode="Markdown")
-
 async def rpg_profil_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     user = update.effective_user
     if chat.type == "private": return
+    _, _, rpg_aktif, _ = ayarlar.grup_ayar_getir(chat.id)
+    if not rpg_aktif:
+        await update.message.reply_text("❌ Bu grupta RPG özellikleri admin tarafından kapatılmıştır kanka.")
+        return
     ad, meslek, seviye, xp, can = ayarlar.rpg_karakter_getir(chat.id, user.id, user.first_name)
     m = f"🎮 **Karakter Profilin:**\n\n🎭 Sınıf: {meslek}\n🎖️ Seviye: {seviye}\n✨ XP: {xp}/{seviye*100}\n❤️ Can: %{can}"
     await update.message.reply_text(m, parse_mode="Markdown")
@@ -287,6 +300,10 @@ async def rpg_saldir_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     saldiran = update.effective_user
     if chat.type == "private" or not update.message.reply_to_message: return
+    _, _, rpg_aktif, _ = ayarlar.grup_ayar_getir(chat.id)
+    if not rpg_aktif:
+        await update.message.reply_text("❌ Bu grupta RPG özellikleri admin tarafından kapatılmıştır kanka.")
+        return
     hedef = update.message.reply_to_message.from_user
     if hedef.id == saldiran.id or hedef.is_bot: return
     s_ad, s_meslek, s_lvl, _, s_can = ayarlar.rpg_karakter_getir(chat.id, saldiran.id, saldiran.first_name)
@@ -305,10 +322,17 @@ async def rpg_saldir_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ayarlar.rpg_karakter_guncelle(chat.id, saldiran.id, -hasar, 0)
         await update.message.reply_text(f"🛡️ **ISKALADIN!**\n\n⚠️ Karşı taraf kontra atakla sana **{hasar} HASAR** bıraktı kanka!")
 
+SERI = ["♠", "♥️", "♦", "♣"]
+KARTLAR = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"]
+
 async def blackjack_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     user = update.effective_user
     if chat.type == "private" or user.id in ayarlar.BLACKJACK_OYUNLAR or not context.args: return
+    _, _, _, kumar_aktif = ayarlar.grup_ayar_getir(chat.id)
+    if not kumar_aktif:
+        await update.message.reply_text("❌ Bu grupta kumar/casino özellikleri admin tarafından kapatılmıştır kanka.")
+        return
     try:
         bahis = int(context.args[0])
         if bahis <= 0 or ayarlar.bakiye_getir(chat.id, user.id) < bahis: return
@@ -324,7 +348,7 @@ async def blackjack_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("😎 **BLACKJACK!** İlk elden 21 yaptın kanka!")
         return
     klavye = [[InlineKeyboardButton("🃏 Kart Çek", callback_data=f"bj_hit_{user.id}"), InlineKeyboardButton("🛑 Kal", callback_data=f"bj_stand_{user.id}")]]
-    await update.message.reply_text(f"🃏 **BLACKJACK**\n💰 Bahis: {bahis}\n🫵 Kartların: {', '.join(oyuncu)} ({o_toplam})\n🕵️‍♂️ Kasa Kartı: {kasa[0]}, [ Gizli ]", reply_markup=InlineKeyboardMarkup(klavye))
+    await update.message.reply_text(f"🃏 **BLACKJACK**\n💰 Bahis: {bahis}\n🫵 Kartların: {', '.join(oyuncu)} ({o_toplam})\n🕵️‍♂️ Kasa Kartı: {kasa}, [ Gizli ]", reply_markup=InlineKeyboardMarkup(klavye))
 
 async def kullanici_analiz_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
@@ -365,4 +389,51 @@ async def giybet_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat.type == "private": return
     await update.message.reply_text("🕵️‍♂️ Chattaki son dedikodular taranıyor kanka...")
     ikili = ayarlar.en_cok_konusan_ikiliyi_bul(chat.id)
-    if not ikili or ikili[2] < 2:
+    if not ikili:
+        await update.message.reply_text("📋 Henüz yeterli dedikodu malzemesi yok kanka.")
+        return
+    yazar1, yazar2, etkilesim = ikili
+    if etkilesim < 2:
+        await update.message.reply_text("📋 Henüz yeterli dedikodu malzemesi yok kanka.")
+        return
+    istemi = f"Grupta son zamanlarda {yazar1} ve {yazar2} chati domine edip peş peşe {etkilesim} kez karşılıklı yazışmışlar. 'Hayırdır siz sevgili misiniz, chate oda tutun kanka' tarzı esprilerle gruptakileri coşturacak magazin gıybeti döktür."
+    try:
+        response = ayarlar.ai_client.models.generate_content(model='gemini-2.5-flash', contents=istemi)
+        await update.message.reply_text(f"👀 **GRUPTA MAGAZİN HABERİ!** 👀\n\n🎯 Şüpheli İkili: {yazar1} 🤝 {yazar2}\n📈 Paslaşma: {etkilesim} Mesaj\n\n{response.text}", parse_mode="Markdown")
+    except: pass
+
+async def fal_bak_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat = update.effective_chat
+    user = update.effective_user
+    if chat.type == "private": return
+    bakiye = ayarlar.bakiye_getir(chat.id, user.id)
+    if bakiye < 100:
+        await update.message.reply_text("❌ Kanka falcımızın eli bedava açılmıyor, en az 100 KankaCoin bakiyen olmalı!")
+        return
+    await update.message.reply_text(f"🔮 {user.first_name} kanka için fincanlar çevrildi, hisler taranıyor, bekle...")
+    ad, meslek, lvl, _, _ = ayarlar.rpg_karakter_getir(chat.id, user.id, user.first_name)
+    istemi = f"Sen gruptakilere fal bakan esprili bir falcısın. Kullanıcı adı: {user.first_name}, RPG mesleği: {meslek}, Seviyesi: {lvl}. Buna göre kanka tarzı eğlenceli, 'üç vakte kadar' gibi laflar içeren kahve falı yaz."
+    try:
+        response = ayarlar.ai_client.models.generate_content(model='gemini-2.5-flash', contents=istemi)
+        ayarlar.bakiye_guncelle(chat.id, user.id, -100)
+        await update.message.reply_text(f"🔮 **FALCINIZ GELDİ! (@{user.username})** 🔮\n✨ *Elinin körü değil, gözünün nuru falın çıktı...* (-100 KankaCoin)\n\n{response.text}", parse_mode="Markdown")
+    except: pass
+
+async def grup_paneli_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat = update.effective_chat
+    if chat.type == "private": return
+    uye = await chat.get_member(update.effective_user.id)
+    if uye.status not in ["creator", "administrator"] and update.effective_user.id != ayarlar.BOT_SAHIBI_ID: return
+    reklam, kufur, rpg, kumar = ayarlar.grup_ayar_getir(chat.id)
+    r_emo = "🟢 AÇIK" if reklam else "🔴 KAPALI"
+    k_emo = "🟢 AÇIK" if kufur else "🔴 KAPALI"
+    rpg_emo = "🟢 AÇIK" if rpg else "🔴 KAPALI"
+    kmr_emo = "🟢 AÇIK" if kumar else "🔴 KAPALI"
+    klavye = [
+        [InlineKeyboardButton(f"🔗 Reklam Engel: {r_emo}", callback_data="panel_reklam_filtresi")],
+        [InlineKeyboardButton(f"🤬 Küfür Engel: {k_emo}", callback_data="panel_kufur_filtresi")],
+        [InlineKeyboardButton(f"⚔️ RPG Oyunu: {rpg_emo}", callback_data="panel_rpg_aktif")],
+        [InlineKeyboardButton(f"🎰 Kumar/Casino: {kmr_emo}", callback_data="panel_kumar_aktif")],
+        [InlineKeyboardButton("❌ Paneli Kapat", callback_data="panel_kapat")]
+    ]
+    await update.message.reply_text(f"🛠️ **{chat.title} YÖNETİM PANELİ** 🛠️\n\nBot özelliklerini buradan şekillendirebilirsin kanka! 👇", reply_markup=InlineKeyboardMarkup(klavye))
