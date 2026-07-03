@@ -14,13 +14,10 @@ BOT_SAHIBI_ID = 123456789  # Kendi sayısal Telegram ID'n
 IBAN_BILGISI = "TR00 1234 5678 9012 3456 7890"
 ALICI_ADI = "Adın Soyadın"
 
-# RAM Üzerinde Tutulacak Geçici Sözlükler
 BLACKJACK_OYUNLAR = {}
 KULLANICI_TAKIP = {}
 
 def baglanti():
-    # PostgreSQL / Neon entegrasyonu için burayı psycopg2 bağlantısına çevirebilirsin kanka.
-    # Şimdilik lokal testlerin ve Render kurulumun sorunsuz çalışsın diye SQLite standartlarındadır.
     return sqlite3.connect("bot_data.db")
 
 def veritabani_kur():
@@ -41,13 +38,15 @@ def veritabani_kur():
     cursor.execute('''CREATE TABLE IF NOT EXISTS grup_ayarlar 
                       (chat_id BIGINT PRIMARY KEY, gece_modu_aktif BOOLEAN DEFAULT FALSE, dil TEXT DEFAULT 'TR',
                        reklam_filtresi BOOLEAN DEFAULT TRUE, kufur_filtresi BOOLEAN DEFAULT TRUE,
-                       rpg_aktif BOOLEAN DEFAULT TRUE, kumar_aktif BOOLEAN DEFAULT TRUE)''')
+                       rpg_aktif BOOLEAN DEFAULT TRUE, kumar_aktif BOOLEAN DEFAULT TRUE, grup_ozel_reklam TEXT DEFAULT '')''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS grup_mesaj_log 
                       (chat_id BIGINT, user_name TEXT, mesaj TEXT, tarih TIMESTAMP DEFAULT CURRENT_TIMESTAMP)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS referanslar 
                       (chat_id BIGINT, davet_eden BIGINT, katilan BIGINT PRIMARY KEY)''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS rpg_karakterler 
                       (chat_id BIGINT, user_id BIGINT, isim TEXT, meslek TEXT, seviye INTEGER DEFAULT 1, xp INTEGER DEFAULT 0, can INTEGER DEFAULT 100, PRIMARY KEY (chat_id, user_id))''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS grup_komut_yetkileri 
+                      (chat_id BIGINT, user_id BIGINT, komut_seviyesi INTEGER DEFAULT 0, PRIMARY KEY (chat_id, user_id))''')
     conn.commit()
     conn.close()
 
@@ -81,7 +80,7 @@ def yasakli_listesi_getir():
     conn = baglanti()
     cursor = conn.cursor()
     cursor.execute("SELECT kelime FROM yasakli_kelimeler")
-    kelimeler = [row for row in cursor.fetchall()]
+    kelimeler = [row[0] for row in cursor.fetchall()]
     conn.close()
     return kelimeler
 
@@ -149,7 +148,6 @@ def en_aktifleri_getir(chat_id):
     veriler = cursor.fetchall()
     conn.close()
     return veriler
-
 def bakiye_getir(chat_id, user_id):
     conn = baglanti()
     cursor = conn.cursor()
@@ -159,7 +157,7 @@ def bakiye_getir(chat_id, user_id):
         cursor.execute("INSERT OR IGNORE INTO kullanici_ekonomi VALUES (?, ?, 1000)", (chat_id, user_id))
         conn.commit()
         bakiye = 1000
-    else: bakiye = veri
+    else: bakiye = veri[0]
     conn.close()
     return bakiye
 
@@ -184,7 +182,7 @@ def gece_modu_durum(chat_id):
     cursor.execute("SELECT gece_modu_aktif FROM grup_ayarlar WHERE chat_id = ?", (chat_id,))
     veri = cursor.fetchone()
     conn.close()
-    return veri if veri else False
+    return veri[0] if veri else False
 
 def dil_guncelle(chat_id, yeni_dil):
     conn = baglanti()
@@ -199,7 +197,7 @@ def dil_getir(chat_id):
     cursor.execute("SELECT dil FROM grup_ayarlar WHERE chat_id = ?", (chat_id,))
     veri = cursor.fetchone()
     conn.close()
-    return veri if veri else "TR"
+    return veri[0] if veri else "TR"
 
 def grup_ayar_getir(chat_id):
     conn = baglanti()
@@ -288,11 +286,41 @@ def en_cok_konusan_ikiliyi_bul(chat_id):
     conn.close()
     return veri
 
+def grup_reklam_guncelle(chat_id, reklam_metni):
+    conn = baglanti()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE grup_ayarlar SET grup_ozel_reklam = ? WHERE chat_id = ?", (reklam_metni, chat_id))
+    conn.commit()
+    conn.close()
+
+def grup_reklam_getir(chat_id):
+    conn = baglanti()
+    cursor = conn.cursor()
+    cursor.execute("SELECT grup_ozel_reklam FROM grup_ayarlar WHERE chat_id = ?", (chat_id,))
+    veri = cursor.fetchone()
+    conn.close()
+    return veri[0] if veri and veri[0] else None
+
+def kullanici_yetki_ayarla(chat_id, user_id, seviye):
+    conn = baglanti()
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR REPLACE INTO grup_komut_yetkileri VALUES (?, ?, ?)", (chat_id, user_id, seviye))
+    conn.commit()
+    conn.close()
+
+def kullanici_yetki_kontrol(chat_id, user_id):
+    conn = baglanti()
+    cursor = conn.cursor()
+    cursor.execute("SELECT komut_seviyesi FROM grup_komut_yetkileri WHERE chat_id = ? AND user_id = ?", (chat_id, user_id))
+    veri = cursor.fetchone()
+    conn.close()
+    return veri[0] if veri else 0
+
 def blackjack_kart_degeri(kartlar):
     toplam = 0
     as_sayisi = 0
     for kart in kartlar:
-        deger = kart.split()
+        deger = kart.split()[0]
         if deger in ["J", "Q", "K"]: toplam += 10
         elif deger == "A": as_sayisi += 1; toplam += 11
         else: toplam += int(deger)
