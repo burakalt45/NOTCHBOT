@@ -6,22 +6,21 @@ import datetime
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
 # ==========================================
-# AYARLAR VE ŞİFRELER (Buraları Doldur kanka)
+# 🔐 AYARLAR VE ŞİFRELER (Buraları Doldur)
 # ==========================================
 TELEGRAM_TOKEN = "BURAYA_BOTFATHER_TOKENINI_YAZ"
 GEMINI_API_KEY = "BURAYA_GEMINI_API_KEY_YAZ"
-BOT_SAHIBI_ID = 123456789  # @userinfobot sayısal kimliğin
+BOT_SAHIBI_ID = 123456789  # Kendi sayısal Telegram ID'n
 IBAN_BILGISI = "TR00 1234 5678 9012 3456 7890"
 ALICI_ADI = "Adın Soyadın"
 
-# Ram Hafıza Paylaşımları
+# RAM Üzerinde Tutulacak Geçici Sözlükler
 BLACKJACK_OYUNLAR = {}
 KULLANICI_TAKIP = {}
 
-# PostgreSQL veya Geçici SQLite Bağlantı Fonksiyonu
 def baglanti():
-    # Kanka Neon PostgreSQL entegrasyonu için burayı psycopg2 bağlantısına çevirebilirsin.
-    # Şimdilik lokal testlerin çökmesin diye SQLite standartlarında bırakıyorum.
+    # PostgreSQL / Neon entegrasyonu için burayı psycopg2 bağlantısına çevirebilirsin kanka.
+    # Şimdilik lokal testlerin ve Render kurulumun sorunsuz çalışsın diye SQLite standartlarındadır.
     return sqlite3.connect("bot_data.db")
 
 def veritabani_kur():
@@ -246,6 +245,26 @@ def rpg_karakter_guncelle(chat_id, user_id, can_degisim, xp_degisim, seviye_degi
                       WHERE chat_id = ? AND user_id = ?''', (can_degisim, xp_degisim, seviye_degisim, chat_id, user_id))
     conn.commit()
     conn.close()
+
+def en_cok_konusan_ikiliyi_bul(chat_id):
+    conn = baglanti()
+    cursor = conn.cursor()
+    cursor.execute('''
+        WITH sirali_loglar AS (
+            SELECT user_name, LEAD(user_name) OVER (ORDER BY tarih) as sonraki_yazar
+            FROM grup_mesaj_log 
+            WHERE chat_id = ?
+        )
+        SELECT user_name, sonraki_yazar, COUNT(*) as etkilesim_sayisi
+        FROM sirali_loglar
+        WHERE sonraki_yazar IS NOT NULL AND user_name != sonraki_yazar
+        GROUP BY user_name, sonraki_yazar
+        ORDER BY etkilesim_sayisi DESC
+        LIMIT 1
+    ''', (chat_id,))
+    veri = cursor.fetchone()
+    conn.close()
+    return veri
 
 def blackjack_kart_degeri(kartlar):
     toplam = 0
