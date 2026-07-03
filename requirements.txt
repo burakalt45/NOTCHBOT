@@ -1,4 +1,5 @@
 python-telegram-bot
 google-genai
 requests
-gTTS
+httpx
+Pillow
