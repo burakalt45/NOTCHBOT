@@ -1,95 +1,183 @@
-import random
-import requests
-import httpx
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes
-import ayarlar
+def bakiye_getir(chat_id, user_id):
+    conn = baglanti()
+    cursor = conn.cursor()
+    cursor.execute("SELECT bakiye FROM kullanici_ekonomi WHERE chat_id = ? AND user_id = ?", (chat_id, user_id))
+    veri = cursor.fetchone()
+    if not veri:
+        cursor.execute("INSERT OR IGNORE INTO kullanici_ekonomi VALUES (?, ?, 1000)", (chat_id, user_id))
+        conn.commit()
+        bakiye = 1000
+    else: bakiye = veri[0]
+    conn.close()
+    return bakiye
 
-# ==========================================
-# 🌐 DİNAMİK DİL SÖZLÜĞÜ (TR & EN)
-# ==========================================
-METINLER = {
-    "TR": {
-        "start": "Selam {} kanka! Ben çok işlevli robotun. 😎",
-        "hava_hata": "Kanka şehir yazmadın! Örnek: /hava istanbul",
-        "kumar_hata": "❌ Bakiyen bu bahis için yetersiz kanka!",
-        "dil_degisti": "✅ Botun dili başarıyla **Türkçe** olarak ayarlandı!",
-        "dil_secin": "🌐 Lütfen bot için bir dil seçin kanka:",
-        "aktifler_hata": "📊 Henüz istatistik yok kanka.",
-        "aktifler_baslik": "🏆 **En Aktif Üyeler:**\n\n",
-        "kripto_hata": "⚠️ Kanka analiz edilecek coini yazmadın! Örnek: `/kripto BTC`"
-    },
-    "EN": {
-        "start": "Hello {} bro! I am your multi-functional bot. 😎",
-        "hava_hata": "Bro you didn't write a city! Example: /hava london",
-        "kumar_hata": "❌ Your balance is insufficient for this bet bro!",
-        "dil_degisti": "✅ Bot language has been successfully set to **English**!",
-        "dil_secin": "🌐 Please select a language for the bot bro:",
-        "aktifler_hata": "📊 No stats available yet bro.",
-        "aktifler_baslik": "🏆 **Most Active Members:**\n\n",
-        "kripto_hata": "⚠️ Bro you didn't write a coin to analyze! Example: `/kripto BTC`"
-    }
-}
+def bakiye_guncelle(chat_id, user_id, miktar):
+    conn = baglanti()
+    cursor = conn.cursor()
+    cursor.execute('''INSERT INTO kullanici_ekonomi VALUES (?, ?, ?)
+                      ON CONFLICT(chat_id, user_id) DO UPDATE SET bakiye = kullanici_ekonomi.bakiye + ?''', (chat_id, user_id, miktar, miktar))
+    conn.commit()
+    conn.close()
 
-# ==========================================
-# 🛠️ YÖNETİCİ VE LİSANS KOMUTLARI
-# ==========================================
-async def kufur_ekle_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ayarlar.BOT_SAHIBI_ID:
-        await update.message.reply_text("❌ Kanka bu komutu sadece botun sahibi kullanabilir!")
-        return
-    if not context.args:
-        await update.message.reply_text("⚠️ Örnek kullanım: `/kufurekle kelime`")
-        return
-    yeni_kelime = " ".join(context.args)
-    if ayarlar.yasakli_ekle(yeni_kelime):
-        await update.message.reply_text(f"✅ '{yeni_kelime}' yasaklılar listesine eklendi.")
-    else:
-        await update.message.reply_text("ℹ️ Bu kelime zaten listede var.")
+def gece_modu_guncelle(chat_id, durum):
+    conn = baglanti()
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO grup_ayarlar (chat_id, gece_modu_aktif) VALUES (?, ?) ON CONFLICT(chat_id) DO UPDATE SET gece_modu_aktif = ?", (chat_id, durum, durum))
+    conn.commit()
+    conn.close()
 
-async def kufur_sil_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ayarlar.BOT_SAHIBI_ID: return
-    if not context.args:
-        await update.message.reply_text("⚠️ Örnek kullanım: `/kufursil kelime`")
-        return
-    silinecek_kelime = " ".join(context.args)
-    if ayarlar.yasakli_sil(silinecek_kelime):
-        await update.message.reply_text(f"🗑️ '{silinecek_kelime}' yasaklı listesinden silindi.")
-    else:
-        await update.message.reply_text("❓ Bu kelime zaten listede yok.")
+def gece_modu_durum(chat_id):
+    conn = baglanti()
+    cursor = conn.cursor()
+    cursor.execute("SELECT gece_modu_aktif FROM grup_ayarlar WHERE chat_id = ?", (chat_id,))
+    veri = cursor.fetchone()
+    conn.close()
+    return veri[0] if veri else False
 
-async def kufur_listesi_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    liste = ayarlar.yasakli_listesi_getir()
-    if not liste:
-        await update.message.reply_text("📋 Yasaklı kelime listesi temiz kanka!")
-        return
-    await update.message.reply_text("🚫 **Yasaklı Kelimeler:**\n\n" + "\n".join([f"- {k}" for k in liste]), parse_mode="Markdown")
+def dil_guncelle(chat_id, yeni_dil):
+    conn = baglanti()
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO grup_ayarlar (chat_id, dil) VALUES (?, ?) ON CONFLICT(chat_id) DO UPDATE SET dil = ?", (chat_id, yeni_dil, yeni_dil))
+    conn.commit()
+    conn.close()
 
-async def grup_ekle_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ayarlar.BOT_SAHIBI_ID: return
-    if not context.args:
-        await update.message.reply_text("⚠️ Örnek kullanım: `/grupekle -100123456`")
-        return
-    try:
-        grup_id = int(context.args[0])
-        ayarlar.grup_onayla(grup_id, "Onaylı Müşteri")
-        await update.message.reply_text(f"✅ {grup_id} ID'li grup onaylandı! Bot aktif.")
-    except ValueError:
-        await update.message.reply_text("⚠️ Geçerli bir sayısal ID gir kanka.")
+def dil_getir(chat_id):
+    conn = baglanti()
+    cursor = conn.cursor()
+    cursor.execute("SELECT dil FROM grup_ayarlar WHERE chat_id = ?", (chat_id,))
+    veri = cursor.fetchone()
+    conn.close()
+    return veri[0] if veri else "TR"
 
-async def grup_cikar_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ayarlar.BOT_SAHIBI_ID: return
-    if not context.args:
-        await update.message.reply_text("⚠️ Örnek kullanım: `/grupcikar -100123456`")
-        return
-    try:
-        grup_id = int(context.args[0])
-        if ayarlar.grup_sil(grup_id):
-            await update.message.reply_text(f"🗑️ {grup_id} ID'li grubun lisansı iptal edildi.")
-        else:
-            await update.message.reply_text("❓ Bu grup onaylı listesinde yok.")
-    except ValueError:
-        await update.message.reply_text("⚠️ Geçerli bir sayısal ID gir kanka.")
+def grup_ayar_getir(chat_id):
+    conn = baglanti()
+    cursor = conn.cursor()
+    cursor.execute("SELECT reklam_filtresi, kufur_filtresi, rpg_aktif, kumar_aktif FROM grup_ayarlar WHERE chat_id = ?", (chat_id,))
+    veri = cursor.fetchone()
+    if not veri:
+        cursor.execute("INSERT INTO grup_ayarlar (chat_id, reklam_filtresi, kufur_filtresi, rpg_aktif, kumar_aktif) VALUES (?, True, True, True, True)", (chat_id,))
+        conn.commit()
+        veri = (True, True, True, True)
+    conn.close()
+    return veri
+
+def grup_ayar_guncelle(chat_id, sutun_adi, yeni_durum):
+    conn = baglanti()
+    cursor = conn.cursor()
+    if sutun_adi in ["reklam_filtresi", "kufur_filtresi", "rpg_aktif", "kumar_aktif"]:
+        cursor.execute(f"UPDATE grup_ayarlar SET {sutun_adi} = ? WHERE chat_id = ?", (yeni_durum, chat_id))
+        conn.commit()
+    conn.close()
+
+def mesaj_logla(chat_id, user_name, mesaj):
+    conn = baglanti()
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO grup_mesaj_log (chat_id, user_name, mesaj) VALUES (?, ?, ?)", (chat_id, user_name, mesaj))
+    conn.commit()
+    conn.close()
+
+def son_mesajlari_getir(chat_id):
+    conn = baglanti()
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_name, mesaj FROM grup_mesaj_log WHERE chat_id = ? ORDER BY tarih DESC LIMIT 150", (chat_id,))
+    veriler = cursor.fetchall()
+    conn.close()
+    return veriler[::-1]
+
+def en_cok_davet_edenler(chat_id):
+    conn = baglanti()
+    cursor = conn.cursor()
+    cursor.execute('''SELECT m.ad, m.username, COUNT(r.katilan) as adet FROM referanslar r 
+                      JOIN mesaj_istatistik m ON r.davet_eden = m.user_id AND r.chat_id = m.chat_id 
+                      WHERE r.chat_id = ? GROUP BY m.ad, m.username ORDER BY adet DESC LIMIT 10''', (chat_id,))
+    veriler = cursor.fetchall()
+    conn.close()
+    return veriler
+
+def rpg_karakter_getir(chat_id, user_id, varsayilan_isim):
+    conn = baglanti()
+    cursor = conn.cursor()
+    cursor.execute("SELECT isim, meslek, seviye, xp, can FROM rpg_karakterler WHERE chat_id = ? AND user_id = ?", (chat_id, user_id))
+    veri = cursor.fetchone()
+    if not veri:
+        meslekler = ["Mafya", "Siber Korsan", "Şövalye", "Fedai"]
+        secilen_meslek = random.choice(meslekler)
+        cursor.execute("INSERT INTO rpg_karakterler VALUES (?, ?, ?, ?, 1, 0, 100)", (chat_id, user_id, varsayilan_isim, secilen_meslek))
+        conn.commit()
+        veri = (varsayilan_isim, secilen_meslek, 1, 0, 100)
+    conn.close()
+    return veri
+
+def rpg_karakter_guncelle(chat_id, user_id, can_degisim, xp_degisim, seviye_degisim=0):
+    conn = baglanti()
+    cursor = conn.cursor()
+    cursor.execute('''UPDATE rpg_karakterler SET can = MIN(100, MAX(0, can + ?)), xp = xp + ?, seviye = seviye + ? 
+                      WHERE chat_id = ? AND user_id = ?''', (can_degisim, xp_degisim, seviye_degisim, chat_id, user_id))
+    conn.commit()
+    conn.close()
+
+def en_cok_konusan_ikiliyi_bul(chat_id):
+    conn = baglanti()
+    cursor = conn.cursor()
+    cursor.execute('''
+        WITH sirali_loglar AS (
+            SELECT user_name, LEAD(user_name) OVER (ORDER BY tarih) as sonraki_yazar
+            FROM grup_mesaj_log 
+            WHERE chat_id = ?
+        )
+        SELECT user_name, sonraki_yazar, COUNT(*) as etkilesim_sayisi
+        FROM sirali_loglar
+        WHERE sonraki_yazar IS NOT NULL AND user_name != sonraki_yazar
+        GROUP BY user_name, sonraki_yazar
+        ORDER BY etkilesim_sayisi DESC
+        LIMIT 1
+    ''', (chat_id,))
+    veri = cursor.fetchone()
+    conn.close()
+    return veri
+
+def grup_reklam_guncelle(chat_id, reklam_metni):
+    conn = baglanti()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE grup_ayarlar SET grup_ozel_reklam = ? WHERE chat_id = ?", (reklam_metni, chat_id))
+    conn.commit()
+    conn.close()
+
+def grup_reklam_getir(chat_id):
+    conn = baglanti()
+    cursor = conn.cursor()
+    cursor.execute("SELECT grup_ozel_reklam FROM grup_ayarlar WHERE chat_id = ?", (chat_id,))
+    veri = cursor.fetchone()
+    conn.close()
+    return veri[0] if veri and veri[0] else None
+
+def kullanici_yetki_ayarla(chat_id, user_id, seviye):
+    conn = baglanti()
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR REPLACE INTO grup_komut_yetkileri VALUES (?, ?, ?)", (chat_id, user_id, seviye))
+    conn.commit()
+    conn.close()
+
+def kullanici_yetki_kontrol(chat_id, user_id):
+    conn = baglanti()
+    cursor = conn.cursor()
+    cursor.execute("SELECT komut_seviyesi FROM grup_komut_yetkileri WHERE chat_id = ? AND user_id = ?", (chat_id, user_id))
+    veri = cursor.fetchone()
+    conn.close()
+    return veri[0] if veri else 0
+
+def blackjack_kart_degeri(kartlar):
+    toplam = 0
+    as_sayisi = 0
+    for kart in kartlar:
+        deger = kart.split()[0]
+        if deger in ["J", "Q", "K"]: toplam += 10
+        elif deger == "A": as_sayisi += 1; toplam += 11
+        else: toplam += int(deger)
+    while toplam > 21 and as_sayisi > 0:
+        toplam -= 10
+        as_sayisi -= 1
+    return toplam
 async def start_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     chat = update.effective_chat
@@ -151,7 +239,7 @@ async def unban_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat.type == "private": return
     if not context.args: return
     try:
-        hedef_id = int(context.args[0])
+        hedef_id = int(context.args)
         await chat.unban_member(user_id=hedef_id)
         ayarlar.banlanan_sil(hedef_id, chat.id)
         await update.message.reply_text(f"✅ ID: {hedef_id} engeli kaldırıldı.")
@@ -163,7 +251,7 @@ async def kripto_analiz_komutu(update: Update, context: ContextTypes.DEFAULT_TYP
     if not context.args:
         await update.message.reply_text(METINLER[dil]["kripto_hata"], parse_mode="Markdown")
         return
-    coin = context.args[0].upper()
+    coin = context.args.upper()
     await update.message.reply_text(f"📊 {coin} için piyasa verileri inceleniyor, bekle kanka...")
     try:
         async with httpx.AsyncClient() as client:
@@ -186,104 +274,114 @@ async def iddaa_analiz_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("⚠️ Kanka analiz edilecek maçları yazmadın! Örnek: `/iddaa Fenerbahçe - Galatasaray`")
         return
     mac_bilgisi = " ".join(context.args)
-    klavye = [[InlineKeyboardButton("🔍 MAÇI TARA", callback_data=f"iddaa_tara_{mac_bilgisi[:50]}")]]
+    klavye = [[InlineKeyboardButton("🔍 MAÇI TARA", callback_data=f"iddaa_tara_{mac_bilgisi[:40]}")]]
     await update.message.reply_text(
         f"⚽ **İDDAA MAÇ ANALİZ MASASI** ⚽\n\n🏟️ **Maç:** {mac_bilgisi}\n👤 **İsteyen:** @{update.effective_user.username}\n\n"
         f"Yapay zeka analiz motorunu çalıştırmak için aşağıdaki butona basın kanka! 👇",
         reply_markup=InlineKeyboardMarkup(klavye)
     )
-async def en_aktifler_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def start_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    chat = update.effective_chat
+    ayarlar.kullanici_kaydet(user.id, user.username, user.first_name)
+    dil = ayarlar.dil_getir(chat.id)
+    mesaj = METINLER[dil]["start"].format(user.first_name) + "\n\n🌤️ /hava [şehir]\n💰 /doviz\n📊 /kripto\n⚽ /iddaa\n🌐 /dil\n📋 /banlist\n🛠️ /panel"
+    await update.message.reply_text(mesaj)
+
+async def dil_degistir_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat = update.effective_chat
+    if chat.type in ["group", "supergroup"]:
+        uye = await chat.get_member(update.effective_user.id)
+        if uye.status not in ["creator", "administrator"] and update.effective_user.id != ayarlar.BOT_SAHIBI_ID:
+            return
+    dil = ayarlar.dil_getir(chat.id)
+    klavye = [[InlineKeyboardButton("🇹🇷 Türkçe", callback_data="setlang_TR"),
+                InlineKeyboardButton("🇺🇸 English", callback_data="setlang_EN")]]
+    await update.message.reply_text(METINLER[dil]["dil_secin"], reply_markup=InlineKeyboardMarkup(klavye))
+
+async def hava_durumu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     dil = ayarlar.dil_getir(chat.id)
-    if chat.type == "private": return
-    liste = ayarlar.en_aktifleri_getir(chat.id)
-    if not liste:
-        await update.message.reply_text(METINLER[dil]["aktifler_hata"])
+    if not context.args:
+        await update.message.reply_text(METINLER[dil]["hava_hata"])
         return
-    mesaj = METINLER[dil]["aktifler_baslik"]
-    madalya = ["🥇", "🥈", "🥉"] + ["▫️"] * 7
-    for i, (ad, uname, sayi) in enumerate(liste):
-        isim = f"@{uname}" if uname else ad
-        mesaj += f"{madalya[i]} {isim} — {sayi} mesaj\n"
-    await update.message.reply_text(mesaj, parse_mode="Markdown")
-
-async def bakiye_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat = update.effective_chat
-    user = update.effective_user
-    if chat.type == "private": return
-    _, _, _, kumar_aktif = ayarlar.grup_ayar_getir(chat.id)
-    if not kumar_aktif:
-        await update.message.reply_text("❌ Bu grupta kumar/casino özellikleri admin tarafından kapatılmıştır kanka.")
-        return
-    bakiye = ayarlar.bakiye_getir(chat.id, user.id)
-    await update.message.reply_text(f"💰 {user.first_name}, bakiyen: **{bakiye} KankaCoin**", parse_mode="Markdown")
-
-async def slot_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat = update.effective_chat
-    user = update.effective_user
-    dil = ayarlar.dil_getir(chat.id)
-    if chat.type == "private" or not context.args: return
-    _, _, _, kumar_aktif = ayarlar.grup_ayar_getir(chat.id)
-    if not kumar_aktif:
-        await update.message.reply_text("❌ Bu grupta kumar/casino özellikleri admin tarafından kapatılmıştır kanka.")
-        return
+    sehir = " ".join(context.args)
     try:
-        bahis = int(context.args[0])
-        if bahis <= 0: return
-    except: return
-    bakiye = ayarlar.bakiye_getir(chat.id, user.id)
-    if bakiye < bahis:
-        await update.message.reply_text(METINLER[dil]["kumar_hata"])
-        return
-    emojis = ["🍒", "🍋", "🍇", "🔔", "💎"]
-    s1, s2, s3 = random.choice(emojis), random.choice(emojis), random.choice(emojis)
-    if s1 == s2 == s3:
-        ayarlar.bakiye_guncelle(chat.id, user.id, bahis * 5)
-        m = f"🎰 **SLOT** 🎰\n| {s1} | {s2} | {s3} |\n\n🎉 MÜKEMMEL! 3'te 3! **+{bahis*5} KankaCoin**"
-    elif s1 == s2 or s2 == s3 or s1 == s3:
-        ayarlar.bakiye_guncelle(chat.id, user.id, bahis * 2)
-        m = f"🎰 **SLOT** 🎰\n| {s1} | {s2} | {s3} |\n\n🥳 Güzel! 2'li yakaladın. **+{bahis*2} KankaCoin**"
-    else:
-        ayarlar.bakiye_guncelle(chat.id, user.id, -bahis)
-        m = f"🎰 **SLOT** 🎰\n| {s1} | {s2} | {s3} |\n\n💸 Ah be kanka tutmadı! **-{bahis} KankaCoin**"
-    await update.message.reply_text(m, parse_mode="Markdown")
-
-async def gecemodu_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat = update.effective_chat
-    if chat.type == "private" or not context.args: return
-    uye = await chat.get_member(update.effective_user.id)
-    if uye.status not in ["creator", "administrator"] and update.effective_user.id != ayarlar.BOT_SAHIBI_ID: return
-    durum = context.args[0].lower()
-    if durum == "ac":
-        ayarlar.gece_modu_guncelle(chat.id, True)
-        await update.message.reply_text("🔒 **Gece Modu Aktif!** Yöneticiler hariç chat kilitlendi kanka.")
-    elif durum == "kapat":
-        ayarlar.gece_modu_guncelle(chat.id, False)
-        await update.message.reply_text("🔓 **Gece Modu Kapatıldı!** Chat herkese açıldı.")
-
-async def chati_ozetle_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat = update.effective_chat
-    if chat.type == "private": return
-    await update.message.reply_text("📝 Son mesajlar taranıyor ve yapay zeka özetiniz çıkarılıyor...")
-    mesajlar = ayarlar.son_mesajlari_getir(chat.id)
-    if not mesajlar: return
-    sohbet_metni = "\n".join([f"{yazar}: {msg}" for yazar, msg in mesajlar])
-    istemi = f"Aşağıdaki konuşmaları oku ve konuşulan ana konuları samimi kanka diliyle maddeler halinde özetle:\n\n{sohbet_metni}"
-    try:
-        response = ayarlar.ai_client.models.generate_content(model='gemini-2.5-flash', contents=istemi)
-        await update.message.reply_text(response.text)
+        res = requests.get(f"https://wttr.in{sehir}?format=%C+%t")
+        if res.status_code == 200 and "💡" not in res.text:
+            await update.message.reply_text(f"🌤️ {sehir.capitalize()}: {res.text.strip()}")
     except: pass
 
-async def davetler_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def doviz_kuru(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        res = requests.get("https://er-api.com").json()
+        try_kuru = res["rates"]["TRY"]
+        eur_try = try_kuru / res["rates"]["EUR"]
+        mesaj = f"💰 **Anlık Döviz Kurları:**\n\n💵 1 Dolar: {try_kuru:.2f} TL\n💶 1 Euro: {eur_try:.2f} TL"
+        await update.message.reply_text(mesaj, parse_mode="Markdown")
+    except: pass
+
+async def ban_listesi_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     if chat.type == "private": return
-    liste = ayarlar.en_cok_davet_edenler(chat.id)
-    if not liste: return
-    mesaj = "🎁 **Davet Yarışması Liderliği:**\n\n"
-    for i, (ad, uname, adet) in enumerate(liste):
-        link = f"@{uname}" if uname else ad
-        mesaj += f"{i+1}. 👤 {link} ➡️ **{adet} Davet**\n"
+    uye = await chat.get_member(update.effective_user.id)
+    if uye.status not in ["creator", "administrator"] and update.effective_user.id != ayarlar.BOT_SAHIBI_ID: return
+    liste = ayarlar.banlanan_listesi_getir(chat.id)
+    if not liste:
+        await update.message.reply_text("📋 Bot tarafından banlanmış kimse yok.")
+        return
+    mesaj = "🚷 **Banlananlar Listesi:**\n\n"
+    for uid, uname, tarih in liste:
+        ulink = f"@{uname}" if uname else f"ID: {uid}"
+        mesaj += f"👤 {ulink}\n📅 Tarih: {tarih}\n🔓 Kaldırmak için: `/unban {uid}`\n\n"
     await update.message.reply_text(mesaj, parse_mode="Markdown")
+
+async def unban_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat = update.effective_chat
+    if chat.type == "private": return
+    if not context.args: return
+    try:
+        hedef_id = int(context.args)
+        await chat.unban_member(user_id=hedef_id)
+        ayarlar.banlanan_sil(hedef_id, chat.id)
+        await update.message.reply_text(f"✅ ID: {hedef_id} engeli kaldırıldı.")
+    except: pass
+
+async def kripto_analiz_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat = update.effective_chat
+    dil = ayarlar.dil_getir(chat.id)
+    if not context.args:
+        await update.message.reply_text(METINLER[dil]["kripto_hata"], parse_mode="Markdown")
+        return
+    coin = context.args.upper()
+    await update.message.reply_text(f"📊 {coin} için piyasa verileri inceleniyor, bekle kanka...")
+    try:
+        async with httpx.AsyncClient() as client:
+            res = await client.get(f"https://binance.com{coin}USDT")
+            data = res.json()
+        fiyat, degisim = float(data['lastPrice']), float(data['priceChangePercent'])
+        istemi = (
+            f"Sen profesyonel finansal veri özetleyicisisin. {coin} verileri: Fiyat: {fiyat} USDT, Değişim: %{degisim}. "
+            f"Al-sat sinyali vermeden son 24 saati özetle. Dil/Tarz: {dil} modunda samimi arkadaş dili olsun. Sonuna YALNIZCA TR ise 'Buradaki bilgiler yatırım tavsiyesi değildir' ekle."
+        )
+        response = ayarlar.ai_client.models.generate_content(model='gemini-2.5-flash', contents=istemi)
+        await update.message.reply_text(response.text)
+    except:
+        await update.message.reply_text("❌ Veri hatası kanka. Çifti doğru yazdığından emin ol (Örn: BTC, ETH).")
+
+async def iddaa_analiz_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat = update.effective_chat
+    if chat.type == "private": return
+    if not context.args:
+        await update.message.reply_text("⚠️ Kanka analiz edilecek maçları yazmadın! Örnek: `/iddaa Fenerbahçe - Galatasaray`")
+        return
+    mac_bilgisi = " ".join(context.args)
+    klavye = [[InlineKeyboardButton("🔍 MAÇI TARA", callback_data=f"iddaa_tara_{mac_bilgisi[:40]}")]]
+    await update.message.reply_text(
+        f"⚽ **İDDAA MAÇ ANALİZ MASASI** ⚽\n\n🏟️ **Maç:** {mac_bilgisi}\n👤 **İsteyen:** @{update.effective_user.username}\n\n"
+        f"Yapay zeka analiz motorunu çalıştırmak için aşağıdaki butona basın kanka! 👇",
+        reply_markup=InlineKeyboardMarkup(klavye)
+    )
 async def rpg_profil_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     user = update.effective_user
@@ -334,7 +432,7 @@ async def blackjack_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Bu grupta kumar/casino özellikleri admin tarafından kapatılmıştır kanka.")
         return
     try:
-        bahis = int(context.args[0])
+        bahis = int(context.args)
         if bahis <= 0 or ayarlar.bakiye_getir(chat.id, user.id) < bahis: return
     except: return
     deste = [f"{k} {s}" for k in KARTLAR for s in SERI]
@@ -364,7 +462,6 @@ async def kullanici_analiz_komutu(update: Update, context: ContextTypes.DEFAULT_
         response = ayarlar.ai_client.models.generate_content(model='gemini-2.5-flash', contents=istemi)
         await update.message.reply_text(response.text)
     except: pass
-
 async def eros_oku_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     user = update.effective_user
@@ -434,6 +531,33 @@ async def grup_paneli_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE)
         [InlineKeyboardButton(f"🤬 Küfür Engel: {k_emo}", callback_data="panel_kufur_filtresi")],
         [InlineKeyboardButton(f"⚔️ RPG Oyunu: {rpg_emo}", callback_data="panel_rpg_aktif")],
         [InlineKeyboardButton(f"🎰 Kumar/Casino: {kmr_emo}", callback_data="panel_kumar_aktif")],
+        [InlineKeyboardButton("📢 Grubun Özel Reklamını Ayarla", callback_data="panel_grup_reklam")],
+        [InlineKeyboardButton("🔑 Komut İzinlerini / Yetkileri Ayarla", callback_data="panel_yetki_menusu")],
         [InlineKeyboardButton("❌ Paneli Kapat", callback_data="panel_kapat")]
     ]
     await update.message.reply_text(f"🛠️ **{chat.title} YÖNETİM PANELİ** 🛠️\n\nBot özelliklerini buradan şekillendirebilirsin kanka! 👇", reply_markup=InlineKeyboardMarkup(klavye))
+
+async def grup_reklam_ayarla_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat = update.effective_chat
+    if chat.type == "private": return
+    uye = await chat.get_member(update.effective_user.id)
+    if uye.status not in ["creator", "administrator"] and update.effective_user.id != ayarlar.BOT_SAHIBI_ID: return
+    if not context.args:
+        await update.message.reply_text("⚠️ Kanka reklam metnini yazmadın! Örnek: `/reklamayarla t.me/link`")
+        return
+    yeni_reklam = " ".join(context.args)
+    ayarlar.grup_reklam_guncelle(chat.id, yeni_reklam)
+    await update.message.reply_text("📢 Grubun özel reklamı başarıyla kaydedildi kanka!")
+
+async def yetki_ver_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat = update.effective_chat
+    if chat.type == "private" or not update.message.reply_to_message: return
+    uye = await chat.get_member(update.effective_user.id)
+    if uye.status != "creator" and update.effective_user.id != ayarlar.BOT_SAHIBI_ID: return
+    if not context.args: return
+    try:
+        seviye = int(context.args[0])
+        hedef_user = update.message.reply_to_message.from_user
+        ayarlar.kullanici_yetki_ayarla(chat.id, hedef_user.id, seviye)
+        await update.message.reply_text(f"✅ @{hedef_user.username} Seviye {seviye} yetkilisi yapıldı!")
+    except: pass
