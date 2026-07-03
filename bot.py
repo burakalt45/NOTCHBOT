@@ -27,7 +27,7 @@ async def captcha_buton_tiklama(update: Update, context: ContextTypes.DEFAULT_TY
         await chat.restrict_member(user_id=user_id, permissions=ChatPermissions(can_send_messages=True))
         await query.message.delete()
         dil = ayarlar.dil_getir(chat.id)
-        onay_msg = f"✅ Dogrulama basarili! Hos geldin @{query.from_user.username} kanka." if dil == "TR" else f"✅ Verification successful! Welcome @{query.from_user.username} bro."
+        onay_msg = f"✅ Dogrulama basarili! Hoş geldin @{query.from_user.username} kanka." if dil == "TR" else f"✅ Verification successful! Welcome @{query.from_user.username} bro."
         await context.bot.send_message(chat_id=chat.id, text=onay_msg)
         await query.answer()
 
@@ -79,7 +79,7 @@ async def blackjack_buton_yonetimi(update: Update, context: ContextTypes.DEFAULT
                 await query.message.edit_text(f"💥 **YANDIN KANKA!** (Bust)\n🫵 Kartlarin: {', '.join(oyuncu)} ({o_toplam})\n💸 **-{bahis} KankaCoin** kaybettin.")
             else:
                 klavye = [[InlineKeyboardButton("🃏 Kart Cek", callback_data=f"bj_hit_{user_id}"), InlineKeyboardButton("🛑 Kal", callback_data=f"bj_stand_{user_id}")]]
-                await query.message.edit_text(f"🃏 **BLACKJACK**\n🫵 Kartlarin: {', '.join(oyuncu)} ({o_toplam})\n🕵️‍♂️ Kasa: {kasa}, [ Gizli ]", reply_markup=InlineKeyboardMarkup(klavye))
+                await query.message.edit_text(f"🃏 **BLACKJACK**\n🫵 Kartlarin: {', '.join(oyuncu)} ({o_toplam})\n🕵️‍♂️ Kasa: {kasa[0]}, [ Gizli ]", reply_markup=InlineKeyboardMarkup(klavye))
 
         elif eylem == "stand":
             o_toplam = ayarlar.blackjack_kart_degeri(oyuncu)
@@ -144,7 +144,6 @@ async def panel_buton_yonetimi(update: Update, context: ContextTypes.DEFAULT_TYP
         ]
         await query.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(yeni_klavye))
         await query.answer("✅ Ayar guncellendi kanka!")
-
 # ⚽ IDDAA TARA BUTONUNA BASILDIGINDA TETIKLENEN ANALIZ MOTORU
 async def iddaa_buton_yonetimi(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -168,7 +167,7 @@ async def iddaa_buton_yonetimi(update: Update, context: ContextTypes.DEFAULT_TYP
             await query.message.edit_text("❌ Mac taranirken yapay zeka motorunda bir hata olustu kanka.")
         await query.answer()
 
-# 🛡️ BOT BASKA BIR GRUBA EKLENDIGINDE LISANS ISTEYEN ALAN
+# 🛡️ BOT BAŞKA BIR GRUBA EKLENDIGINDE LISANS ISTEYEN ALAN
 async def bot_gruba_eklendi(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     if not update.message.new_chat_members: return
@@ -178,11 +177,12 @@ async def bot_gruba_eklendi(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("Selam kankalar! Bu grupta aktifim. 😎")
                 return
             iban_mesaji = (
-                f"👋 Selam! Bu grup icin aktif bir lisans bulunmuyor.\n\n🔒 **Satın Almak Icin:**\n"
+                f"👋 Selam! Beni bu gruba eklediniz ama bu grup için aktif bir lisans bulunmuyor.\n\n🔒 **Satın Almak Icin:**\n"
                 f"🏦 **IBAN:** {ayarlar.IBAN_BILGISI}\nAlıcı: {ayarlar.ALICI_ADI}\n\n"
                 f"🆔 **Grup ID:** `{chat.id}`\n*(Acıklamaya bu ID'yi yaz kanka)*"
             )
             await update.message.reply_text(iban_mesaji, parse_mode="Markdown")
+
 # 🧠 YAPAY ZEKALI TEHDIT KORUMASI VE CAPTCHA BASLATMA
 async def yeni_uye_karsilama(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
@@ -203,7 +203,6 @@ async def yeni_uye_karsilama(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await chat.restrict_member(user_id=yeni_uye.id, permissions=ChatPermissions(can_send_messages=False))
         klavye = [[InlineKeyboardButton("🤖 Ben Insanim", callback_data=f"captcha_{yeni_uye.id}")]]
         await update.message.reply_text(f"🚨 **GUVENLIK KORUMASI** 🚨\n\nHos geldin {yeni_uye.first_name} kanka! Konusmak icin butona basmalisin.", reply_markup=InlineKeyboardMarkup(klavye))
-
 # 📑 CHAT FILTRELERI, SES CEVIRICI VE YAPAY ZEKA SOHBET MOTORU
 async def ana_mesaj_yoneticisi(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -248,7 +247,6 @@ async def ana_mesaj_yoneticisi(update: Update, context: ContextTypes.DEFAULT_TYP
                 return
             except: return
 
-        # Loglar, Sayaclar ve Karakter Can Yenileme
         ayarlar.mesaj_logla(chat.id, user.first_name, gelen_metin)
         ayarlar.mesaj_sayisi_arttir(chat.id, user.id, user.username, user.first_name)
         if rpg:
@@ -342,3 +340,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
