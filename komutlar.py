@@ -6,7 +6,7 @@ from telegram.ext import ContextTypes
 import ayarlar
 
 # ==========================================
-# 🌐 KÜRESEL DİL DESTEĞİ SÖZLÜĞÜ (DİNAMİK)
+# 🌐 DİNAMİK DİL SÖZLÜĞÜ (TR & EN)
 # ==========================================
 METINLER = {
     "TR": {
@@ -71,7 +71,7 @@ async def grup_ekle_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Örnek kullanım: `/grupekle -100123456`")
         return
     try:
-        grup_id = int(context.args)
+        grup_id = int(context.args[0])
         ayarlar.grup_onayla(grup_id, "Onaylı Müşteri")
         await update.message.reply_text(f"✅ {grup_id} ID'li grup onaylandı! Bot aktif.")
     except ValueError:
@@ -83,7 +83,7 @@ async def grup_cikar_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Örnek kullanım: `/grupcikar -100123456`")
         return
     try:
-        grup_id = int(context.args)
+        grup_id = int(context.args[0])
         if ayarlar.grup_sil(grup_id):
             await update.message.reply_text(f"🗑️ {grup_id} ID'li grubun lisansı iptal edildi.")
         else:
@@ -95,7 +95,7 @@ async def start_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     ayarlar.kullanici_kaydet(user.id, user.username, user.first_name)
     dil = ayarlar.dil_getir(chat.id)
-    mesaj = METINLER[dil]["start"].format(user.first_name) + "\n\n🌤️ /hava [şehir]\n💰 /doviz\n🤖 /analiz\n🌐 /dil\n📋 /banlist"
+    mesaj = METINLER[dil]["start"].format(user.first_name) + "\n\n🌤️ /hava [şehir]\n💰 /doviz\n📊 /kripto\n⚽ /iddaa\n🌐 /dil\n📋 /banlist"
     await update.message.reply_text(mesaj)
 
 async def dil_degistir_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -131,37 +131,6 @@ async def doviz_kuru(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(mesaj, parse_mode="Markdown")
     except: pass
 
-async def kripto_analiz_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat = update.effective_chat
-    dil = ayarlar.dil_getir(chat.id)
-    if not context.args:
-        await update.message.reply_text(METINLER[dil]["kripto_hata"], parse_mode="Markdown")
-        return
-    coin = context.args.upper()
-    await update.message.reply_text(f"📊 {coin} için piyasa verileri inceleniyor, bekle kanka...")
-    try:
-        async with httpx.AsyncClient() as client:
-            res = await client.get(f"https://binance.com{coin}USDT")
-            data = res.json()
-        fiyat, degisim = float(data['lastPrice']), float(data['priceChangePercent'])
-        istemi = (
-            f"Sen profesyonel finansal veri özetleyicisisin. {coin} verileri: Fiyat: {fiyat} USDT, Değişim: %{degisim}. "
-            f"Al-sat sinyali vermeden durum özeti yaz. Dil/Tarz: {dil} modunda samimi arkadaş dili olsun. Sonuna YALNIZCA TR ise 'Yatırım tavsiyesi değildir' ekle."
-        )
-        response = ayarlar.ai_client.models.generate_content(model='gemini-2.5-flash', contents=istemi)
-        await update.message.reply_text(response.text)
-    except:
-        await update.message.reply_text("❌ API veya Veri Hatası.")
-
-async def iddaa_analiz_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args: return
-    mac_bilgisi = " ".join(context.args)
-    await update.message.reply_text("⚽ Yapay zeka takımları analiz ediyor, bekleyin...")
-    try:
-        istemi = f"Kullanıcı şu maç hakkında yorum istiyor: {mac_bilgisi}. Kesin kupon vaat etmeden samimi, kanka tarzı eğlenceli 2 tahmin yürüt. Sonuna sorumluluk reddi ekle."
-        response = ayarlar.ai_client.models.generate_content(model='gemini-2.5-flash', contents=istemi)
-        await update.message.reply_text(response.text)
-    except: pass
 async def ban_listesi_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     if chat.type == "private": return
@@ -180,13 +149,47 @@ async def ban_listesi_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def unban_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     if chat.type == "private": return
+    if not context.args: return
     try:
-        hedef_id = int(context.args)
+        hedef_id = int(context.args[0])
         await chat.unban_member(user_id=hedef_id)
         ayarlar.banlanan_sil(hedef_id, chat.id)
         await update.message.reply_text(f"✅ ID: {hedef_id} engeli kaldırıldı.")
     except: pass
 
+async def kripto_analiz_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat = update.effective_chat
+    dil = ayarlar.dil_getir(chat.id)
+    if not context.args:
+        await update.message.reply_text(METINLER[dil]["kripto_hata"], parse_mode="Markdown")
+        return
+    coin = context.args[0].upper()
+    await update.message.reply_text(f"📊 {coin} için piyasa verileri inceleniyor, bekle kanka...")
+    try:
+        async with httpx.AsyncClient() as client:
+            res = await client.get(f"https://binance.com{coin}USDT")
+            data = res.json()
+        fiyat, degisim = float(data['lastPrice']), float(data['priceChangePercent'])
+        istemi = (
+            f"Sen profesyonel finansal veri özetleyicisisin. {coin} verileri: Fiyat: {fiyat} USDT, Değişim: %{degisim}. "
+            f"Al-sat sinyali vermeden son 24 saati özetle. Dil/Tarz: {dil} modunda samimi arkadaş dili olsun. Sonuna YALNIZCA TR ise 'Buradaki bilgiler yatırım tavsiyesi değildir' ekle."
+        )
+        response = ayarlar.ai_client.models.generate_content(model='gemini-2.5-flash', contents=istemi)
+        await update.message.reply_text(response.text)
+    except:
+        await update.message.reply_text("❌ Veri hatası kanka. Çifti doğru yazdığından emin ol (Örn: BTC, ETH).")
+
+async def iddaa_analiz_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("⚠️ Kanka analiz edilecek maçları yazmadın!")
+        return
+    mac_bilgisi = " ".join(context.args)
+    await update.message.reply_text("⚽ Yapay zeka takımları analiz ediyor, bekleyin...")
+    try:
+        istemi = f"Kullanıcı şu maç hakkında yorum istiyor: {mac_bilgisi}. Kesin kupon vaat etmeden samimi, kanka tarzı eğlenceli 2 tahmin yürüt. Sonuna sorumluluk reddi uyarısı ekle."
+        response = ayarlar.ai_client.models.generate_content(model='gemini-2.5-flash', contents=istemi)
+        await update.message.reply_text(response.text)
+    except: pass
 async def en_aktifler_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     dil = ayarlar.dil_getir(chat.id)
@@ -215,7 +218,7 @@ async def slot_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     dil = ayarlar.dil_getir(chat.id)
     if chat.type == "private" or not context.args: return
     try:
-        bahis = int(context.args)
+        bahis = int(context.args[0])
         if bahis <= 0: return
     except: return
     bakiye = ayarlar.bakiye_getir(chat.id, user.id)
@@ -240,7 +243,7 @@ async def gecemodu_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat.type == "private" or not context.args: return
     uye = await chat.get_member(update.effective_user.id)
     if uye.status not in ["creator", "administrator"] and update.effective_user.id != ayarlar.BOT_SAHIBI_ID: return
-    durum = context.args.lower()
+    durum = context.args[0].lower()
     if durum == "ac":
         ayarlar.gece_modu_guncelle(chat.id, True)
         await update.message.reply_text("🔒 **Gece Modu Aktif!** Yöneticiler hariç chat kilitlendi kanka.")
@@ -302,15 +305,12 @@ async def rpg_saldir_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ayarlar.rpg_karakter_guncelle(chat.id, saldiran.id, -hasar, 0)
         await update.message.reply_text(f"🛡️ **ISKALADIN!**\n\n⚠️ Karşı taraf kontra atakla sana **{hasar} HASAR** bıraktı kanka!")
 
-SERI = ["♠", "♥️", "♦", "♣"]
-KARTLAR = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"]
-
 async def blackjack_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     user = update.effective_user
     if chat.type == "private" or user.id in ayarlar.BLACKJACK_OYUNLAR or not context.args: return
     try:
-        bahis = int(context.args)
+        bahis = int(context.args[0])
         if bahis <= 0 or ayarlar.bakiye_getir(chat.id, user.id) < bahis: return
     except: return
     deste = [f"{k} {s}" for k in KARTLAR for s in SERI]
@@ -324,7 +324,7 @@ async def blackjack_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("😎 **BLACKJACK!** İlk elden 21 yaptın kanka!")
         return
     klavye = [[InlineKeyboardButton("🃏 Kart Çek", callback_data=f"bj_hit_{user.id}"), InlineKeyboardButton("🛑 Kal", callback_data=f"bj_stand_{user.id}")]]
-    await update.message.reply_text(f"🃏 **BLACKJACK**\n💰 Bahis: {bahis}\n🫵 Kartların: {', '.join(oyuncu)} ({o_toplam})\n🕵️‍♂️ Kasa Kartı: {kasa}, [ Gizli ]", reply_markup=InlineKeyboardMarkup(klavye))
+    await update.message.reply_text(f"🃏 **BLACKJACK**\n💰 Bahis: {bahis}\n🫵 Kartların: {', '.join(oyuncu)} ({o_toplam})\n🕵️‍♂️ Kasa Kartı: {kasa[0]}, [ Gizli ]", reply_markup=InlineKeyboardMarkup(klavye))
 
 async def kullanici_analiz_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
@@ -332,7 +332,7 @@ async def kullanici_analiz_komutu(update: Update, context: ContextTypes.DEFAULT_
     if chat.type == "private": return
     hedef = update.message.reply_to_message.from_user if update.message.reply_to_message else user
     if hedef.is_bot: return
-    await update.message.reply_text("🔍 Yapay zeka gruptaki tüm verilerinizi inceliyor, bekleyin...")
+    await update.message.reply_text("🔍 Yapay zeka verileri inceliyor, bekleyin...")
     try:
         bakiye = ayarlar.bakiye_getir(chat.id, hedef.id)
         ad, meslek, lvl, _, _ = ayarlar.rpg_karakter_getir(chat.id, hedef.id, hedef.first_name)
@@ -340,3 +340,29 @@ async def kullanici_analiz_komutu(update: Update, context: ContextTypes.DEFAULT_
         response = ayarlar.ai_client.models.generate_content(model='gemini-2.5-flash', contents=istemi)
         await update.message.reply_text(response.text)
     except: pass
+
+async def eros_oku_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat = update.effective_chat
+    user = update.effective_user
+    if chat.type == "private": return
+    if update.message.reply_to_message:
+        hedef_user = update.message.reply_to_message.from_user
+    elif context.args:
+        hedef_username = context.args[0].replace("@", "")
+        hedef_user = type('User', (object,), {'first_name': hedef_username, 'username': hedef_username, 'id': 0})()
+    else: return
+    if hedef_user.id == user.id: return
+    ask_yuzdesi = random.randint(1, 100)
+    istemi = f"Gruptaki {user.first_name}, {hedef_user.first_name} kişisine aşk oku fırlattı. Aşk uyumu %{ask_yuzdesi} çıktı. Eğlenceli, samimi kanka tarzı dalga geçen aşk falı yaz."
+    try:
+        response = ayarlar.ai_client.models.generate_content(model='gemini-2.5-flash', contents=istemi)
+        kalp_bar = "❤️" * (ask_yuzdesi // 10) + "🖤" * (10 - (ask_yuzdesi // 10))
+        await update.message.reply_text(f"💘 **EROS AŞK OKU** 💘\n\n👤 Aşık: {user.first_name}\n🎯 Hedef: {hedef_user.first_name}\n📈 Uyumluluk: %{ask_yuzdesi}\n| {kalp_bar} |\n\n{response.text}", parse_mode="Markdown")
+    except: pass
+
+async def giybet_komutu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat = update.effective_chat
+    if chat.type == "private": return
+    await update.message.reply_text("🕵️‍♂️ Chattaki son dedikodular taranıyor kanka...")
+    ikili = ayarlar.en_cok_konusan_ikiliyi_bul(chat.id)
+    if not ikili or ikili[2] < 2:
