@@ -1,15 +1,18 @@
 # ==========================================================
 # SNL CONFIG v3
-# PART 1
-# Core Settings / Environment / Security
+# Core Settings / Environment / Security / Database / Redis
+# Full Stable Enterprise Version
 # ==========================================================
 
 import secrets
+import logging
 from enum import Enum
 from typing import Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
 
 
 class Environment(str, Enum):
@@ -30,274 +33,190 @@ class Settings(BaseSettings):
     # ======================================================
     # ENVIRONMENT
     # ======================================================
-
     ENV: Environment = Environment.DEVELOPMENT
     DEBUG: bool = False
-
     PROJECT_NAME: str = "SNL"
-
     VERSION: str = "3.0"
 
     # ======================================================
     # SERVER
     # ======================================================
-
     HOST: str = "0.0.0.0"
-
     PORT: int = 8000
-
     BASE_URL: str = "https://sananelazim.tr"
-
     API_PREFIX: str = "/api"
 
     # ======================================================
     # SECURITY
     # ======================================================
-
     SECRET_KEY: str
-
     JWT_SECRET: str | None = None
-
     ALGORITHM: str = "HS256"
-
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
-
     REFRESH_TOKEN_EXPIRE_DAYS: int = 30
-
     ADMIN_SECRET: str = ""
 
     # ======================================================
     # LIMITS
     # ======================================================
-
     MAX_MESSAGE_LENGTH: int = 1000
-
     MAX_USERNAME_LENGTH: int = 32
-
     MAX_BIO_LENGTH: int = 250
-
     MAX_DISPLAY_NAME: int = 64
-
     MAX_UPLOAD_SIZE: int = 50 * 1024 * 1024
+
+    # ======================================================
+    # DATABASE
+    # ======================================================
+    DATABASE_URL: str
+    DATABASE_POOL_SIZE: int = 20
+    DATABASE_MAX_OVERFLOW: int = 30
+    DATABASE_POOL_TIMEOUT: int = 30
+    DATABASE_POOL_RECYCLE: int = 1800
+    DATABASE_ECHO: bool = False
+    DATABASE_CONNECT_TIMEOUT: int = 15
+    DATABASE_STATEMENT_TIMEOUT: int = 30000
+
+    # ======================================================
+    # REDIS
+    # ======================================================
+    REDIS_ENABLED: bool = True
+    REDIS_URL: str = "redis://localhost:6379/0"
+    REDIS_CACHE_DB: int = 1
+    REDIS_SESSION_DB: int = 2
+    REDIS_MESSAGE_DB: int = 3
+    REDIS_SOCKET_DB: int = 4
+    REDIS_PASSWORD: str = ""
+    REDIS_PREFIX: str = "snl:"
+
+    # ======================================================
+    # CACHE
+    # ======================================================
+    CACHE_ENABLED: bool = True
+    CACHE_DEFAULT_TTL: int = 300
+    CACHE_USER_TTL: int = 600
+    CACHE_POST_TTL: int = 300
+    CACHE_PROFILE_TTL: int = 900
+    CACHE_MESSAGE_TTL: int = 60
+
+    # ======================================================
+    # MESSAGE QUEUE
+    # ======================================================
+    QUEUE_ENABLED: bool = False
+    QUEUE_DRIVER: Literal["redis", "rabbitmq", "kafka"] = "redis"
+    RABBITMQ_URL: str = ""
+    KAFKA_BOOTSTRAP_SERVERS: str = ""
 
     # ======================================================
     # VALIDATORS
     # ======================================================
-
     @field_validator("PORT")
     @classmethod
     def validate_port(cls, value):
-
         if value < 1 or value > 65535:
             raise ValueError("Invalid port.")
-
         return value
 
     @field_validator("BASE_URL")
     @classmethod
     def validate_base_url(cls, value):
-
         value = value.strip().rstrip("/")
-
-        if not (
-            value.startswith("http://")
-            or value.startswith("https://")
-        ):
-            raise ValueError(
-                "BASE_URL must start with http:// or https://"
-            )
-
+        if not (value.startswith("http://") or value.startswith("https://")):
+            raise ValueError("BASE_URL must start with http:// or https://")
         return value
 
     @field_validator("SECRET_KEY")
     @classmethod
     def validate_secret(cls, value):
-
         if len(value) < 32:
-            raise ValueError(
-                "SECRET_KEY minimum 32 characters."
-            )
-
+            raise ValueError("SECRET_KEY minimum 32 characters.")
         return value
 
     @field_validator("ADMIN_SECRET")
     @classmethod
     def validate_admin_secret(cls, value):
-
         if value and len(value) < 16:
-            raise ValueError(
-                "ADMIN_SECRET minimum 16 characters."
-            )
-
+            raise ValueError("ADMIN_SECRET minimum 16 characters.")
         return value
 
-    @property
-    def jwt_secret(self):
+    @field_validator("DATABASE_URL")
+    @classmethod
+    def validate_database_url(cls, value):
+        value = value.strip()
+        if not value:
+            raise ValueError("DATABASE_URL cannot be empty.")
+        return value
 
+    @field_validator("DATABASE_POOL_SIZE")
+    @classmethod
+    def validate_pool(cls, value):
+        if value < 1:
+            raise ValueError("DATABASE_POOL_SIZE must be greater than 0.")
+        return value
+
+    @field_validator("REDIS_URL")
+    @classmethod
+    def validate_redis(cls, value):
+        if value and not value.startswith("redis://"):
+            raise ValueError("Invalid REDIS_URL.")
+        return value
+
+    @field_validator("CACHE_DEFAULT_TTL")
+    @classmethod
+    def validate_cache(cls, value):
+        if value < 1:
+            raise ValueError("CACHE TTL must be positive.")
+        return value
+
+    # ======================================================
+    # PROPERTIES & METHODS
+    # ======================================================
+    @property
+    def jwt_secret(self) -> str:
         return self.JWT_SECRET or self.SECRET_KEY
 
     @property
-    def is_production(self):
-
+    def is_production(self) -> bool:
         return self.ENV == Environment.PRODUCTION
 
     @property
-    def is_development(self):
-
+    def is_development(self) -> bool:
         return self.ENV == Environment.DEVELOPMENT
 
-    @staticmethod
-    def generate_secret():
+    @property
+    def database_pool_settings(self) -> dict:
+        return {
+            "pool_size": self.DATABASE_POOL_SIZE,
+            "max_overflow": self.DATABASE_MAX_OVERFLOW,
+            "pool_timeout": self.DATABASE_POOL_TIMEOUT,
+            "pool_recycle": self.DATABASE_POOL_RECYCLE,
+        }
 
+    @property
+    def redis_enabled(self) -> bool:
+        return self.REDIS_ENABLED
+
+    @property
+    def queue_enabled(self) -> bool:
+        return self.QUEUE_ENABLED
+
+    @staticmethod
+    def generate_secret() -> str:
         return secrets.token_urlsafe(64)
 
 
-settings = Settings()
-    # ==========================================================
-# DATABASE
-# ==========================================================
-
-DATABASE_URL: str
-
-DATABASE_POOL_SIZE: int = 20
-
-DATABASE_MAX_OVERFLOW: int = 30
-
-DATABASE_POOL_TIMEOUT: int = 30
-
-DATABASE_POOL_RECYCLE: int = 1800
-
-DATABASE_ECHO: bool = False
-
-DATABASE_CONNECT_TIMEOUT: int = 15
-
-DATABASE_STATEMENT_TIMEOUT: int = 30000
-
-
-# ==========================================================
-# REDIS
-# ==========================================================
-
-REDIS_ENABLED: bool = True
-
-REDIS_URL: str = "redis://localhost:6379/0"
-
-REDIS_CACHE_DB: int = 1
-
-REDIS_SESSION_DB: int = 2
-
-REDIS_MESSAGE_DB: int = 3
-
-REDIS_SOCKET_DB: int = 4
-
-REDIS_PASSWORD: str = ""
-
-REDIS_PREFIX: str = "snl:"
-
-
-# ==========================================================
-# CACHE
-# ==========================================================
-
-CACHE_ENABLED: bool = True
-
-CACHE_DEFAULT_TTL: int = 300
-
-CACHE_USER_TTL: int = 600
-
-CACHE_POST_TTL: int = 300
-
-CACHE_PROFILE_TTL: int = 900
-
-CACHE_MESSAGE_TTL: int = 60
-
-
-# ==========================================================
-# MESSAGE QUEUE
-# ==========================================================
-
-QUEUE_ENABLED: bool = False
-
-QUEUE_DRIVER: Literal[
-    "redis",
-    "rabbitmq",
-    "kafka"
-] = "redis"
-
-RABBITMQ_URL: str = ""
-
-KAFKA_BOOTSTRAP_SERVERS: str = ""
-
-
-# ==========================================================
-# CONNECTION VALIDATORS
-# ==========================================================
-
-@field_validator("DATABASE_URL")
-@classmethod
-def validate_database_url(cls, value):
-
-    value = value.strip()
-
-    if not value:
-        raise ValueError("DATABASE_URL cannot be empty.")
-
-    return value
-
-
-@field_validator("DATABASE_POOL_SIZE")
-@classmethod
-def validate_pool(cls, value):
-
-    if value < 1:
-        raise ValueError("DATABASE_POOL_SIZE must be greater than 0.")
-
-    return value
-
-
-@field_validator("REDIS_URL")
-@classmethod
-def validate_redis(cls, value):
-
-    if value and not value.startswith("redis://"):
-        raise ValueError("Invalid REDIS_URL.")
-
-    return value
-
-
-@field_validator("CACHE_DEFAULT_TTL")
-@classmethod
-def validate_cache(cls, value):
-
-    if value < 1:
-        raise ValueError("CACHE TTL must be positive.")
-
-    return value
-
-
-@property
-def database_pool_settings(self):
-
-    return {
-
-        "pool_size": self.DATABASE_POOL_SIZE,
-
-        "max_overflow": self.DATABASE_MAX_OVERFLOW,
-
-        "pool_timeout": self.DATABASE_POOL_TIMEOUT,
-
-        "pool_recycle": self.DATABASE_POOL_RECYCLE,
-
-    }
-
-
-@property
-def redis_enabled(self):
-
-    return self.REDIS_ENABLED
-
-
-@property
-def queue_enabled(self):
-
-    return self.QUEUE_ENABLED
+# ======================================================
+# INITIALIZATION (AYARLARI YÜKLEME)
+# ======================================================
+try:
+    settings = Settings()
+    
+    # VIP Akıllı Uyarı Sistemi
+    if not settings.ADMIN_SECRET:
+        logger.warning("⚠️ [Security Uyarısı]: ADMIN_SECRET boş. Yetkili endpoint'ler korumasız kalabilir.")
+    if settings.is_development:
+        logger.info(f"🛠️ [SNL]: Geliştirici modu aktif. Sunucu portu: {settings.PORT}")
+        
+except Exception as e:
+    logger.critical(f"❌ [SNL Config v3]: Ayarlar yüklenirken mimari hata oluştu: {e}")
+    raise RuntimeError(f"Config
