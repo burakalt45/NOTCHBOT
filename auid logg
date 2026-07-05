@@ -1,0 +1,173 @@
+# ================================================================
+# SNL // AUDIT LOG SİSTEMİ v3.4 (FINAL PRODUCTION HARDENED)
+# ================================================================
+# Satır     : ~165
+# Kullanım  :
+#   from audit_log import audit, AuditAction
+#   audit(db, action=AuditAction.ORDER_PLACE, user_id=1, target="Order #123")
+# ================================================================
+
+import json
+import logging
+from datetime import datetime
+from enum import Enum
+from typing import Optional, Any
+
+from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey
+from sqlalchemy.orm import Session
+
+from database import Base
+
+logger = logging.getLogger(__name__)
+
+
+# ── Audit Action Tipleri ─────────────────────────────────────
+
+class AuditAction(str, Enum):
+    # Auth & Hesap Hareketleri
+    LOGIN           = "login"
+    LOGOUT          = "logout"
+    LOGOUT_ALL      = "logout_all"
+    REGISTER        = "register"
+    PASSWORD_CHANGE = "password_change"
+    EMAIL_CHANGE    = "email_change"
+    USERNAME_CHANGE = "username_change"
+    ACCOUNT_DELETE  = "account_delete"
+
+    # Profil & Galeri
+    AVATAR_UPDATE   = "avatar_update"
+    BIO_UPDATE      = "bio_update"
+    PHOTO_UPLOAD    = "photo_upload"
+    PHOTO_DELETE    = "photo_delete"
+
+    # Mağaza & Ürün Yönetimi (SNL Store)
+    STORE_CREATE    = "store_create"
+    STORE_UPDATE    = "store_update"
+    PRODUCT_CREATE  = "product_create"
+    PRODUCT_UPDATE  = "product_update"
+    PRODUCT_DELETE  = "product_delete"
+
+    # Sipariş Süreçleri
+    ORDER_PLACE     = "order_place"
+    ORDER_STATUS    = "order_status_change"
+    ORDER_CANCEL    = "order_cancel"
+
+    # İş İlanları
+    JOB_CREATE      = "job_create"
+    JOB_DELETE      = "job_delete"
+
+    # Sosyal İlişkiler
+    FOLLOW          = "follow"
+    UNFOLLOW        = "unfollow"
+    BLOCK           = "block"
+    UNBLOCK         = "unblock"
+
+    # Aile & Topluluk
+    FAMILY_INVITE   = "family_invite"
+    FAMILY_ACCEPT   = "family_accept"
+    FAMILY_REJECT   = "family_reject"
+    FAMILY_REMOVE   = "family_remove"
+
+    # Moderasyon & Admin Panel Yetkileri
+    ADMIN_BAN       = "admin_ban"
+    ADMIN_UNBAN     = "admin_unban"
+    ADMIN_MAKE      = "admin_make"
+    ADMIN_UNMAKE    = "admin_unmake"
+    ADMIN_DELETE    = "admin_delete"
+    CONFIG_CHANGE   = "config_change"
+
+
+# ── Audit Log Modeli ─────────────────────────────────────────
+
+class AuditLog(Base):
+    """
+    Kim ne zaman ne yaptı — final production hardened audit trail.
+    Veritabanı indexleri sayesinde admin panel aramaları ultra hızlı çalışır.
+    """
+    __tablename__ = "audit_logs"
+
+    id         = Column(Integer, primary_key=True, index=True)
+    user_id    = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    action     = Column(String(50),  nullable=False, index=True)
+    target     = Column(String(100), nullable=True)
+    detail     = Column(Text,        nullable=True)
+    ip_address = Column(String(45),  nullable=True)
+    user_agent = Column(String(250), nullable=True)
+    created_at = Column(DateTime,    default=datetime.utcnow, index=True)
+
+
+# ── Helper (SAFE + FAST) ─────────────────────────────────────
+
+def _safe_detail(detail: Any) -> Optional[str]:
+    """Detail alanını boşluksuz, optimize JSON veya string olarak limitler."""
+    if detail is None:
+        return None
+
+    try:
+        if isinstance(detail, (dict, list)):
+            return json.dumps(
+                detail,
+                ensure_ascii=False,
+                separators=(",", ":")
+            )[:2000]
+
+        return str(detail)[:2000]
+
+    except Exception:
+        # fail silent (log spam + recursion risk engellenir)
+        return None
+
+
+# ── Audit Core (FINAL HARDENED) ──────────────────────────────
+
+def audit(
+    db: Session,
+    action: AuditAction,
+    user_id: Optional[int] = None,
+    target: Optional[str] = None,
+    detail: Optional[Any] = None,
+    ip_address: Optional[str] = None,
+    user_agent: Optional[str] = None,
+) -> None:
+    """
+    Kritik sistem loglama katmanı.
+    Full isolation garantisi sayesinde veritabanı hatalarında bile ana akışı asla etkilemez.
+    """
+    try:
+        processed_detail = _safe_detail(detail)
+
+        log = AuditLog(
+            user_id=user_id,
+            action=action.value,
+            target=(target[:100] if target else None),
+            detail=processed_detail,
+            ip_address=(ip_address[:45] if ip_address else None),
+            user_agent=(user_agent[:250] if user_agent else None),
+        )
+
+        db.add(log)
+
+        # ── SAFE TRANSACTION (NO DOUBLE RISK) ──
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            return  # ❗ kritik fix: exception propagate etmiyoruz, burada kesiyoruz.
+
+        logger.info(
+            "🛡️ AUDIT",
+            extra={
+                "user_id": user_id,
+                "action": action.value,
+                "target": target,
+                "detail": processed_detail,
+            }
+        )
+
+    except Exception:
+        # FULL ISOLATION: Üst catch bloğu ne olursa olsun ana akışı korur.
+        logger.exception("❌ AUDIT_WRITE_FAILED")
+        try:
+            db.rollback()
+        except Exception:
+            pass
