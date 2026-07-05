@@ -1,0 +1,2478 @@
+# ==========================================================
+# SNL DM HANDLER v2.0
+# Enterprise Direct Message System
+# Part 1/?
+# ==========================================================
+
+import logging
+import uuid
+from datetime import datetime
+
+import sentry_sdk
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+from user import User
+
+logger = logging.getLogger(__name__)
+
+# ==========================================================
+# CONFIG
+# ==========================================================
+
+MAX_MESSAGE_LENGTH = 1000
+
+MESSAGE_TYPES = {
+    "text",
+    "image",
+    "video",
+    "audio",
+    "file",
+    "location",
+    "gif",
+    "sticker"
+}
+
+MESSAGE_STATUS = {
+    "sent",
+    "delivered",
+    "read"
+}
+
+# ==========================================================
+# HELPERS
+# ==========================================================
+
+def generate_message_uuid():
+    return str(uuid.uuid4())
+
+
+def utc_now():
+    return datetime.utcnow()
+
+
+def user_by_username(db: Session, username: str):
+    return db.query(User).filter(User.username == username).first()
+
+
+# ==========================================================
+# BLOCK SYSTEM
+# ==========================================================
+
+def is_blocked(
+    db: Session,
+    user_a: int,
+    user_b: int
+) -> bool:
+
+    try:
+
+        row = db.execute(
+
+            text("""
+
+            SELECT 1
+
+            FROM blocked_users
+
+            WHERE
+
+            (blocker_id=:a AND blocked_id=:b)
+
+            OR
+
+            (blocker_id=:b AND blocked_id=:a)
+
+            LIMIT 1
+
+            """),
+
+            {
+
+                "a": user_a,
+
+                "b": user_b
+
+            }
+
+        ).fetchone()
+
+        return row is not None
+
+    except Exception:
+
+        return False
+
+
+# ==========================================================
+# CONVERSATION
+# ==========================================================
+
+def get_or_create_conversation(
+
+    db: Session,
+
+    user1: int,
+
+    user2: int
+
+):
+
+    try:
+
+        row = db.execute(
+
+            text("""
+
+            SELECT id
+
+            FROM conversations
+
+            WHERE
+
+            (user1_id=:u1 AND user2_id=:u2)
+
+            OR
+
+            (user1_id=:u2 AND user2_id=:u1)
+
+            LIMIT 1
+
+            """),
+
+            {
+
+                "u1": user1,
+
+                "u2": user2
+
+            }
+
+        ).fetchone()
+
+        if row:
+
+            return row.id
+                    conversation_uuid = str(uuid.uuid4())
+
+        result = db.execute(
+            text("""
+                INSERT INTO conversations
+                (
+                    uuid,
+                    user1_id,
+                    user2_id,
+                    created_at,
+                    updated_at
+                )
+                VALUES
+                (
+                    :uuid,
+                    :u1,
+                    :u2,
+                    NOW(),
+                    NOW()
+                )
+                RETURNING id
+            """),
+            {
+                "uuid": conversation_uuid,
+                "u1": user1,
+                "u2": user2
+            }
+        )
+
+        conversation_id = result.fetchone().id
+
+        db.commit()
+
+        return conversation_id
+
+    except Exception as e:
+
+        logger.error(f"Conversation Error: {e}")
+
+        sentry_sdk.capture_exception(e)
+
+        db.rollback()
+
+        return None
+
+
+# ==========================================================
+# SAVE MESSAGE
+# ==========================================================
+
+def save_dm(
+
+    db: Session,
+
+    sender_username: str,
+
+    recipient_username: str,
+
+    message: str,
+
+    msg_type: str = "text",
+
+    reply_to=None,
+
+    attachment=None
+
+):
+
+    try:
+
+        sender = user_by_username(db, sender_username)
+
+        recipient = user_by_username(db, recipient_username)
+
+        if sender is None or recipient is None:
+
+            return False
+
+        if msg_type not in MESSAGE_TYPES:
+
+            return False
+
+        if is_blocked(db, sender.id, recipient.id):
+
+            return False
+
+        conversation_id = get_or_create_conversation(
+
+            db,
+
+            sender.id,
+
+            recipient.id
+
+        )
+
+        if conversation_id is None:
+
+            return False
+
+        message_uuid = generate_message_uuid()
+
+        db.execute(
+
+            text("""
+                             INSERT INTO direct_messages
+            (
+                uuid,
+                conversation_id,
+                sender_id,
+                recipient_id,
+                text,
+                msg_type,
+                attachment,
+                reply_to,
+                status,
+                is_read,
+                is_deleted,
+                edited,
+                created_at,
+                updated_at
+            )
+
+            VALUES
+            (
+                :uuid,
+                :conversation_id,
+                :sender,
+                :recipient,
+                :text,
+                :msg_type,
+                :attachment,
+                :reply_to,
+                'sent',
+                FALSE,
+                FALSE,
+                FALSE,
+                NOW(),
+                NOW()
+            )
+
+            """),
+
+            {
+
+                "uuid": message_uuid,
+
+                "conversation_id": conversation_id,
+
+                "sender": sender.id,
+
+                "recipient": recipient.id,
+
+                "text": message[:MAX_MESSAGE_LENGTH],
+
+                "msg_type": msg_type,
+
+                "attachment": attachment,
+
+                "reply_to": reply_to
+
+            }
+
+        )
+
+        db.execute(
+
+            text("""
+
+            UPDATE conversations
+
+            SET
+
+                updated_at = NOW(),
+
+                last_message = :msg
+
+            WHERE id = :cid
+
+            """),
+
+            {
+
+                "msg": message[:100],
+
+                "cid": conversation_id
+
+            }
+
+        )
+
+        db.commit()
+
+        return True
+
+    except Exception as e:
+
+        logger.error(f"Save DM Error: {e}")
+
+        sentry_sdk.capture_exception(e)
+
+        db.rollback()
+
+        return False
+
+
+# ==========================================================
+# MESSAGE STATUS
+# ==========================================================
+
+def update_message_status(
+
+    db: Session,
+
+    message_uuid: str,
+
+    status: str
+
+):
+
+    if status not in MESSAGE_STATUS:
+
+        return False
+                    try:
+
+            result = db.execute(
+
+                text("""
+
+                UPDATE direct_messages
+
+                SET
+
+                    status = :status,
+
+                    updated_at = NOW()
+
+                WHERE uuid = :uuid
+
+                """),
+
+                {
+
+                    "status": status,
+
+                    "uuid": message_uuid
+
+                }
+
+            )
+
+            db.commit()
+
+            return result.rowcount > 0
+
+        except Exception as e:
+
+            logger.error(f"Status Update Error: {e}")
+
+            sentry_sdk.capture_exception(e)
+
+            db.rollback()
+
+            return False
+
+
+# ==========================================================
+# READ SYSTEM
+# ==========================================================
+
+def mark_as_read(
+
+    db: Session,
+
+    conversation_id: int,
+
+    reader_id: int
+
+):
+
+    try:
+
+        db.execute(
+
+            text("""
+
+            UPDATE direct_messages
+
+            SET
+
+                is_read = TRUE,
+
+                status = 'read',
+
+                updated_at = NOW()
+
+            WHERE
+
+                conversation_id = :cid
+
+            AND
+
+                recipient_id = :reader
+
+            AND
+
+                is_read = FALSE
+
+            """),
+
+            {
+
+                "cid": conversation_id,
+
+                "reader": reader_id
+
+            }
+
+        )
+
+        db.commit()
+
+        return True
+
+    except Exception as e:
+
+        logger.error(f"Read Error: {e}")
+
+        sentry_sdk.capture_exception(e)
+
+        db.rollback()
+
+        return False
+
+
+# ==========================================================
+# DELIVERED SYSTEM
+# ==========================================================
+
+def mark_as_delivered(
+
+    db: Session,
+
+    conversation_id: int,
+
+    recipient_id: int
+
+):
+
+    try:
+                    db.execute(
+
+            text("""
+
+            UPDATE direct_messages
+
+            SET
+
+                status='delivered',
+
+                updated_at=NOW()
+
+            WHERE
+
+                conversation_id=:cid
+
+            AND
+
+                recipient_id=:rid
+
+            AND
+
+                status='sent'
+
+            """),
+
+            {
+
+                "cid": conversation_id,
+
+                "rid": recipient_id
+
+            }
+
+        )
+
+        db.commit()
+
+        return True
+
+    except Exception as e:
+
+        logger.error(f"Delivered Error: {e}")
+
+        sentry_sdk.capture_exception(e)
+
+        db.rollback()
+
+        return False
+
+
+# ==========================================================
+# UNREAD COUNT
+# ==========================================================
+
+def get_unread_count(
+
+    db: Session,
+
+    user_id: int
+
+):
+
+    try:
+
+        row = db.execute(
+
+            text("""
+
+            SELECT COUNT(*)
+
+            FROM direct_messages
+
+            WHERE
+
+                recipient_id=:uid
+
+            AND
+
+                is_read=FALSE
+
+            AND
+
+                is_deleted=FALSE
+
+            """),
+
+            {
+
+                "uid": user_id
+
+            }
+
+        ).fetchone()
+
+        return row[0]
+
+    except Exception as e:
+
+        logger.error(f"Unread Count Error: {e}")
+
+        return 0
+            # ==========================================================
+# TYPING STOP
+# ==========================================================
+
+def typing_stop(
+
+    db: Session,
+
+    conversation_id: int,
+
+    user_id: int
+
+):
+
+    try:
+
+        db.execute(
+
+            text("""
+
+            UPDATE typing_status
+
+            SET
+
+                is_typing = FALSE,
+
+                updated_at = NOW()
+
+            WHERE
+
+                conversation_id = :cid
+
+            AND
+
+                user_id = :uid
+
+            """),
+
+            {
+
+                "cid": conversation_id,
+
+                "uid": user_id
+
+            }
+
+        )
+
+        db.commit()
+
+        return True
+
+    except Exception as e:
+
+        logger.error(f"Typing Stop Error: {e}")
+
+        sentry_sdk.capture_exception(e)
+
+        db.rollback()
+
+        return False
+
+
+# ==========================================================
+# CHECK TYPING
+# ==========================================================
+
+def is_user_typing(
+
+    db: Session,
+
+    conversation_id: int,
+
+    user_id: int
+
+):
+
+    try:
+
+        row = db.execute(
+
+            text("""
+
+            SELECT is_typing
+
+            FROM typing_status
+
+            WHERE
+
+                conversation_id = :cid
+
+            AND
+
+                user_id = :uid
+
+            LIMIT 1
+
+            """),
+
+            {
+
+                "cid": conversation_id,
+
+                "uid": user_id
+
+            }
+
+        ).fetchone()
+
+        if
+            # ==========================================================
+# DELETE MESSAGE
+# ==========================================================
+
+def delete_message_for_me(
+    db: Session,
+    message_uuid: str,
+    user_id: int
+):
+
+    try:
+
+        result = db.execute(
+
+            text("""
+
+            INSERT INTO deleted_messages
+            (
+                message_uuid,
+                user_id,
+                created_at
+            )
+            VALUES
+            (
+                :uuid,
+                :uid,
+                NOW()
+            )
+
+            ON CONFLICT DO NOTHING
+
+            """),
+
+            {
+                "uuid": message_uuid,
+                "uid": user_id
+            }
+
+        )
+
+        db.commit()
+
+        return True
+
+    except Exception as e:
+
+        logger.error(f"Delete For Me Error: {e}")
+
+        sentry_sdk.capture_exception(e)
+
+        db.rollback()
+
+        return False
+
+
+# ==========================================================
+# DELETE FOR EVERYONE
+# ==========================================================
+
+def delete_message_for_everyone(
+
+    db: Session,
+
+    message_uuid: str,
+
+    sender_id: int
+
+):
+
+    try:
+
+        result = db.execute(
+
+            text("""
+
+            UPDATE direct_messages
+
+            SET
+
+                is_deleted = TRUE,
+
+                deleted_for_everyone = TRUE,
+
+                updated_at = NOW()
+
+            WHERE
+
+                uuid = :uuid
+
+            AND
+
+                sender_id = :sid
+
+            """),
+
+            {
+
+                "uuid": message_uuid,
+
+                "sid": sender_id
+
+            }
+
+        )
+
+        db.commit()
+
+        return result.rowcount > 0
+
+    except Exception as e:
+
+        logger.error(f"Delete Everyone Error: {e}")
+
+        sentry_sdk.capture_exception(e)
+
+        db.rollback()
+
+        return False
+
+
+# ==========================================================
+# PIN MESSAGE
+# ==========================================================
+
+def pin_message(
+
+    db: Session,
+
+    message_uuid: str,
+
+    user_id: int
+
+):
+
+    try:
+
+        result = db.execute(
+
+            text("""
+
+            UPDATE direct_messages
+
+            SET
+
+                pinned = TRUE,
+
+                pinned_by = :uid,
+
+                pinned_at = NOW()
+
+            WHERE
+
+                uuid = :uuid
+
+            """),
+
+            {
+
+                "uuid": message_uuid,
+
+                "uid": user_id
+
+            }
+
+        )
+
+        db.commit()
+
+        return result.rowcount > 0
+
+    except Exception as e:
+
+        logger.error(f"Pin Error: {e}")
+
+        db.rollback()
+
+        return False
+            # ==========================================================
+# UNPIN MESSAGE
+# ==========================================================
+
+def unpin_message(
+
+    db: Session,
+
+    message_uuid: str
+
+):
+
+    try:
+
+        result = db.execute(
+
+            text("""
+
+            UPDATE direct_messages
+
+            SET
+
+                pinned = FALSE,
+
+                pinned_by = NULL,
+
+                pinned_at = NULL,
+
+                updated_at = NOW()
+
+            WHERE
+
+                uuid = :uuid
+
+            """),
+
+            {
+
+                "uuid": message_uuid
+
+            }
+
+        )
+
+        db.commit()
+
+        return result.rowcount > 0
+
+    except Exception as e:
+
+        logger.error(f"Unpin Error: {e}")
+
+        sentry_sdk.capture_exception(e)
+
+        db.rollback()
+
+        return False
+
+
+# ==========================================================
+# STAR MESSAGE
+# ==========================================================
+
+def star_message(
+
+    db: Session,
+
+    message_uuid: str,
+
+    user_id: int
+
+):
+
+    try:
+
+        db.execute(
+
+            text("""
+
+            INSERT INTO starred_messages
+            (
+                message_uuid,
+                user_id,
+                created_at
+            )
+            VALUES
+            (
+                :uuid,
+                :uid,
+                NOW()
+            )
+
+            ON CONFLICT DO NOTHING
+
+            """),
+
+            {
+
+                "uuid": message_uuid,
+
+                "uid": user_id
+
+            }
+
+        )
+
+        db.commit()
+
+        return True
+
+    except Exception as e:
+
+        logger.error(f"Star Error: {e}")
+
+        sentry_sdk.capture_exception(e)
+
+        db.rollback()
+
+        return False
+
+
+# ==========================================================
+# UNSTAR MESSAGE
+# ==========================================================
+
+def unstar_message(
+
+    db: Session,
+
+    message_uuid: str,
+
+    user_id: int
+
+):
+
+    try:
+
+        result = db.execute(
+
+            text("""
+
+            DELETE FROM starred_messages
+
+            WHERE
+
+                message_uuid = :uuid
+
+            AND
+
+                user_id = :uid
+
+            """),
+
+            {
+
+                "uuid": message_uuid,
+
+                "uid": user_id
+
+            }
+
+        )
+
+        db.commit()
+
+        return result.rowcount > 0
+
+    except Exception as e:
+
+        logger.error(f"Unstar Error: {e}")
+
+        sentry_sdk.capture_exception(e)
+
+        db.rollback()
+
+        return False
+
+
+# ==========================================================
+# REPLY MESSAGE
+# ==========================================================
+
+def reply_message(
+
+    db: Session,
+
+    sender_username: str,
+
+    recipient_username: str,
+
+    message: str,
+
+    reply_to_uuid: str,
+
+    msg_type: str = "text",
+
+    attachment=None
+
+):
+
+    return save_dm(
+
+        db=db,
+
+        sender_username=sender_username,
+
+        recipient_username=recipient_username,
+
+        message=message,
+
+        msg_type=msg_type,
+
+        reply_to=reply_to_uuid,
+
+        attachment=attachment
+
+       )
+            # ==========================================================
+# REACTION SYSTEM
+# ==========================================================
+
+def add_reaction(
+
+    db: Session,
+
+    message_uuid: str,
+
+    user_id: int,
+
+    emoji: str
+
+):
+
+    try:
+
+        db.execute(
+
+            text("""
+
+            INSERT INTO message_reactions
+            (
+
+                message_uuid,
+
+                user_id,
+
+                emoji,
+
+                created_at
+
+            )
+
+            VALUES
+            (
+
+                :uuid,
+
+                :uid,
+
+                :emoji,
+
+                NOW()
+
+            )
+
+            ON CONFLICT
+            (message_uuid,user_id,emoji)
+
+            DO NOTHING
+
+            """),
+
+            {
+
+                "uuid": message_uuid,
+
+                "uid": user_id,
+
+                "emoji": emoji
+
+            }
+
+        )
+
+        db.commit()
+
+        return True
+
+    except Exception as e:
+
+        logger.error(f"Reaction Error: {e}")
+
+        sentry_sdk.capture_exception(e)
+
+        db.rollback()
+
+        return False
+
+
+def remove_reaction(
+
+    db: Session,
+
+    message_uuid: str,
+
+    user_id: int,
+
+    emoji: str
+
+):
+
+    try:
+
+        result = db.execute(
+
+            text("""
+
+            DELETE FROM message_reactions
+
+            WHERE
+
+                message_uuid=:uuid
+
+            AND
+
+                user_id=:uid
+
+            AND
+
+                emoji=:emoji
+
+            """),
+
+            {
+
+                "uuid": message_uuid,
+
+                "uid": user_id,
+
+                "emoji": emoji
+
+            }
+
+        )
+
+        db.commit()
+
+        return result.rowcount > 0
+
+    except Exception as e:
+
+        logger.error(f"Remove Reaction Error: {e}")
+
+        db.rollback()
+
+        return False
+
+
+# ==========================================================
+# GET REACTIONS
+# ==========================================================
+
+def get_reactions(
+
+    db: Session,
+
+    message_uuid: str
+
+):
+
+    try:
+
+        rows = db.execute(
+
+            text("""
+
+            SELECT
+
+                emoji,
+
+                COUNT(*) AS total
+
+            FROM message_reactions
+
+            WHERE
+
+                message_uuid=:uuid
+
+            GROUP BY emoji
+
+            ORDER BY total DESC
+
+            """),
+
+            {
+
+                "uuid": message_uuid
+
+            }
+
+        ).fetchall()
+
+        return [
+
+            {
+
+                "emoji": r.emoji,
+
+                "count": r.total
+
+            }
+
+            for r in rows
+
+        ]
+
+    except Exception as e:
+
+        logger.error(f"Reaction List Error: {e}")
+
+        return []
+            # ==========================================================
+# FORWARD MESSAGE
+# ==========================================================
+
+def forward_message(
+
+    db: Session,
+
+    message_uuid: str,
+
+    sender_username: str,
+
+    recipient_username: str
+
+):
+
+    try:
+
+        row = db.execute(
+
+            text("""
+
+            SELECT
+
+                text,
+
+                msg_type,
+
+                attachment
+
+            FROM direct_messages
+
+            WHERE uuid = :uuid
+
+            LIMIT 1
+
+            """),
+
+            {
+
+                "uuid": message_uuid
+
+            }
+
+        ).fetchone()
+
+        if row is None:
+
+            return False
+
+        return save_dm(
+
+            db=db,
+
+            sender_username=sender_username,
+
+            recipient_username=recipient_username,
+
+            message=row.text,
+
+            msg_type=row.msg_type,
+
+            attachment=row.attachment
+
+        )
+
+    except Exception as e:
+
+        logger.error(f"Forward Error: {e}")
+
+        sentry_sdk.capture_exception(e)
+
+        return False
+
+
+# ==========================================================
+# SEARCH MESSAGE
+# ==========================================================
+
+def search_messages(
+
+    db: Session,
+
+    conversation_id: int,
+
+    keyword: str,
+
+    limit: int = 50
+
+):
+
+    try:
+
+        rows = db.execute(
+
+            text("""
+
+            SELECT
+
+                uuid,
+
+                sender_id,
+
+                recipient_id,
+
+                text,
+
+                created_at
+
+            FROM direct_messages
+
+            WHERE
+
+                conversation_id = :cid
+
+            AND
+
+                is_deleted = FALSE
+
+            AND
+
+                LOWER(text)
+
+                LIKE LOWER(:search)
+
+            ORDER BY created_at DESC
+
+            LIMIT :limit
+
+            """),
+
+            {
+
+                "cid": conversation_id,
+
+                "search": f"%{keyword}%",
+
+                "limit": limit
+
+            }
+
+        ).fetchall()
+
+        return rows
+
+    except Exception as e:
+
+        logger.error(f"Search Error: {e}")
+
+        sentry_sdk.capture_exception(e)
+
+        return []
+
+
+# ==========================================================
+# PAGINATION
+# ==========================================================
+
+def get_messages_before(
+
+    db: Session,
+
+    conversation_id: int,
+
+    before_message_id: int,
+
+    limit: int = 30
+
+):
+
+    try:
+
+        rows = db.execute(
+
+            text("""
+
+            SELECT *
+
+            FROM direct_messages
+
+            WHERE
+
+                conversation_id = :cid
+
+            AND
+
+                id < :mid
+
+            AND
+
+                is_deleted = FALSE
+
+            ORDER BY id DESC
+
+            LIMIT :limit
+
+            """),
+
+            {
+
+                "cid": conversation_id,
+
+                "mid": before_message_id,
+
+                "limit": limit
+
+            }
+
+        ).fetchall()
+
+        return list(reversed(rows))
+
+    except Exception as e:
+
+        logger.error(f"Pagination Error: {e}")
+
+        return []
+            # ==========================================================
+# UNSEND MESSAGE
+# ==========================================================
+
+def unsend_message(
+
+    db: Session,
+
+    message_uuid: str,
+
+    sender_id: int,
+
+    max_seconds: int = 300
+
+):
+
+    try:
+
+        result = db.execute(
+
+            text("""
+
+            UPDATE direct_messages
+
+            SET
+
+                is_deleted = TRUE,
+
+                unsent = TRUE,
+
+                updated_at = NOW()
+
+            WHERE
+
+                uuid = :uuid
+
+            AND
+
+                sender_id = :sid
+
+            AND
+
+                EXTRACT(EPOCH FROM (NOW() - created_at)) <= :sec
+
+            """),
+
+            {
+
+                "uuid": message_uuid,
+
+                "sid": sender_id,
+
+                "sec": max_seconds
+
+            }
+
+        )
+
+        db.commit()
+
+        return result.rowcount > 0
+
+    except Exception as e:
+
+        logger.error(f"Unsend Error: {e}")
+
+        sentry_sdk.capture_exception(e)
+
+        db.rollback()
+
+        return False
+
+
+# ==========================================================
+# SCHEDULE MESSAGE
+# ==========================================================
+
+def schedule_message(
+
+    db: Session,
+
+    sender_id: int,
+
+    recipient_id: int,
+
+    text_message: str,
+
+    send_at,
+
+    msg_type="text"
+
+):
+
+    try:
+
+        db.execute(
+
+            text("""
+
+            INSERT INTO scheduled_messages
+            (
+
+                sender_id,
+
+                recipient_id,
+
+                text,
+
+                msg_type,
+
+                send_at,
+
+                created_at
+
+            )
+
+            VALUES
+            (
+
+                :sid,
+
+                :rid,
+
+                :txt,
+
+                :type,
+
+                :send_at,
+
+                NOW()
+
+            )
+
+            """),
+
+            {
+
+                "sid": sender_id,
+
+                "rid": recipient_id,
+
+                "txt": text_message,
+
+                "type": msg_type,
+
+                "
+                    # ==========================================================
+# SELF DESTRUCT MESSAGE
+# ==========================================================
+
+def schedule_self_destruct(
+
+    db: Session,
+
+    message_uuid: str,
+
+    expire_at
+
+):
+
+    try:
+
+        db.execute(
+
+            text("""
+
+            UPDATE direct_messages
+
+            SET
+
+                expires_at = :expire,
+
+                self_destruct = TRUE,
+
+                updated_at = NOW()
+
+            WHERE uuid = :uuid
+
+            """),
+
+            {
+
+                "expire": expire_at,
+
+                "uuid": message_uuid
+
+            }
+
+        )
+
+        db.commit()
+
+        return True
+
+    except Exception as e:
+
+        logger.error(f"Self Destruct Error: {e}")
+
+        sentry_sdk.capture_exception(e)
+
+        db.rollback()
+
+        return False
+
+
+# ==========================================================
+# SAVE DRAFT
+# ==========================================================
+
+def save_draft(
+
+    db: Session,
+
+    user_id: int,
+
+    conversation_id: int,
+
+    draft_text: str
+
+):
+
+    try:
+
+        db.execute(
+
+            text("""
+
+            INSERT INTO message_drafts
+
+            (
+
+                user_id,
+
+                conversation_id,
+
+                draft,
+
+                updated_at
+
+            )
+
+            VALUES
+
+            (
+
+                :uid,
+
+                :cid,
+
+                :draft,
+
+                NOW()
+
+            )
+
+            ON CONFLICT (user_id, conversation_id)
+
+            DO UPDATE
+
+            SET
+
+                draft = EXCLUDED.draft,
+
+                updated_at = NOW()
+
+            """),
+
+            {
+
+                "uid": user_id,
+
+                "cid": conversation_id,
+
+                "draft": draft_text[:MAX_MESSAGE_LENGTH]
+
+            }
+
+        )
+
+        db.commit()
+
+        return True
+
+    except Exception as e:
+
+        logger.error(f"Draft Save Error: {e}")
+
+        db.rollback()
+
+        return False
+
+
+# ==========================================================
+# GET DRAFT
+# ==========================================================
+
+def get_draft(
+
+    db: Session,
+
+    user_id: int,
+
+    conversation_id: int
+
+):
+
+    try:
+
+        row = db.execute(
+
+            text("""
+
+            SELECT draft
+
+            FROM message_drafts
+
+            WHERE
+
+                user_id = :uid
+
+            AND
+
+                conversation_id = :cid
+
+            LIMIT 1
+
+            """),
+
+            {
+
+                "uid": user_id,
+
+                "cid": conversation_id
+
+            }
+
+        ).fetchone()
+
+        if row:
+
+            return row.draft
+
+        return ""
+
+    except Exception:
+
+        return ""
+
+
+# ==========================================================
+# DELETE DRAFT
+# ==========================================================
+
+def delete_draft(
+
+    db: Session,
+
+    user_id: int,
+
+    conversation_id: int
+
+):
+
+    try:
+
+        result = db.execute(
+
+            text("""
+
+            DELETE FROM message_drafts
+
+            WHERE
+
+                user_id = :uid
+
+            AND
+
+                conversation_id = :cid
+
+            """),
+
+            {
+
+                "uid": user_id,
+
+                "cid": conversation_id
+
+            }
+
+        )
+
+        db.commit()
+
+        return result.rowcount > 0
+
+    except Exception as e:
+
+        logger.error(f"Draft Delete Error: {e}")
+
+        db.rollback()
+
+        return False
+            # ==========================================================
+# MUTE CONVERSATION
+# ==========================================================
+
+def mute_conversation(
+
+    db: Session,
+
+    user_id: int,
+
+    conversation_id: int,
+
+    until=None
+
+):
+
+    try:
+
+        db.execute(
+
+            text("""
+
+            INSERT INTO muted_conversations
+            (
+
+                user_id,
+
+                conversation_id,
+
+                mute_until,
+
+                created_at
+
+            )
+
+            VALUES
+            (
+
+                :uid,
+
+                :cid,
+
+                :until,
+
+                NOW()
+
+            )
+
+            ON CONFLICT (user_id, conversation_id)
+
+            DO UPDATE
+
+            SET
+
+                mute_until = EXCLUDED.mute_until
+
+            """),
+
+            {
+
+                "uid": user_id,
+
+                "cid": conversation_id,
+
+                "until": until
+
+            }
+
+        )
+
+        db.commit()
+
+        return True
+
+    except Exception as e:
+
+        logger.error(f"Mute Error: {e}")
+
+        db.rollback()
+
+        return False
+
+
+# ==========================================================
+# UNMUTE CONVERSATION
+# ==========================================================
+
+def unmute_conversation(
+
+    db: Session,
+
+    user_id: int,
+
+    conversation_id: int
+
+):
+
+    try:
+
+        result = db.execute(
+
+            text("""
+
+            DELETE FROM muted_conversations
+
+            WHERE
+
+                user_id=:uid
+
+            AND
+
+                conversation_id=:cid
+
+            """),
+
+            {
+
+                "uid": user_id,
+
+                "cid": conversation_id
+
+            }
+
+        )
+
+        db.commit()
+
+        return result.rowcount > 0
+
+    except Exception as e:
+
+        logger.error(f"Unmute Error: {e}")
+
+        db.rollback()
+
+        return False
+
+
+# ==========================================================
+# ARCHIVE CONVERSATION
+# ==========================================================
+
+def archive_conversation(
+
+    db: Session,
+
+    user_id: int,
+
+    conversation_id: int
+
+):
+
+    try:
+
+        db.execute(
+
+            text("""
+
+            INSERT INTO archived_conversations
+            (
+
+                user_id,
+
+                conversation_id,
+
+                archived_at
+
+            )
+
+            VALUES
+            (
+
+                :uid,
+
+                :cid,
+
+                NOW()
+
+            )
+
+            ON CONFLICT DO NOTHING
+
+            """),
+
+            {
+
+                "uid": user_id,
+
+                "cid": conversation_id
+
+            }
+
+        )
+
+        db.commit()
+
+        return True
+
+    except Exception as e:
+
+        logger.error(f"Archive Error: {e}")
+
+        db.rollback()
+
+        return False
+
+
+# ==========================================================
+# UNARCHIVE CONVERSATION
+# ==========================================================
+
+def unarchive_conversation(
+
+    db: Session,
+
+    user_id: int,
+
+    conversation_id: int
+
+):
+
+    try:
+
+        result = db.execute(
+
+            text("""
+
+            DELETE FROM archived_conversations
+
+            WHERE
+
+                user_id=:uid
+
+            AND
+
+                conversation_id=:cid
+
+            """),
+
+            {
+
+                "uid": user_id,
+
+                "cid": conversation_id
+
+            }
+
+        )
+
+        db.commit()
+
+        return result.rowcount > 0
+
+    except Exception as e:
+
+        logger.error(f"Unarchive Error: {e}")
+
+        db.rollback()
+
+        return False
+            # ==========================================================
+# USER PRESENCE SYSTEM
+# ==========================================================
+
+def set_user_online(
+
+    db: Session,
+
+    user_id: int,
+
+    device_id: str,
+
+    ip_address: str = None
+
+):
+
+    try:
+
+        db.execute(
+
+            text("""
+
+            INSERT INTO user_presence
+            (
+
+                user_id,
+
+                device_id,
+
+                is_online,
+
+                last_seen,
+
+                ip_address,
+
+                created_at
+
+            )
+
+            VALUES
+            (
+
+                :uid,
+
+                :device,
+
+                TRUE,
+
+                NOW(),
+
+                :ip,
+
+                NOW()
+
+            )
+
+            ON CONFLICT (user_id, device_id)
+
+            DO UPDATE
+
+            SET
+
+                is_online = TRUE,
+
+                last_seen = NOW(),
+
+                ip_address = EXCLUDED.ip_address
+
+            """),
+
+            {
+
+                "uid": user_id,
+
+                "device": device_id,
+
+                "ip": ip_address
+
+            }
+
+        )
+
+        db.commit()
+
+        return True
+
+    except Exception as e:
+
+        logger.error(f"Online Error: {e}")
+
+        db.rollback()
+
+        return False
+
+
+# ==========================================================
+# USER OFFLINE
+# ==========================================================
+
+def set_user_offline(
+
+    db: Session,
+
+    user_id: int,
+
+    device_id: str
+
+):
+
+    try:
+
+        db.execute(
+
+            text("""
+
+            UPDATE user_presence
+
+            SET
+
+                is_online = FALSE,
+
+                last_seen = NOW()
+
+            WHERE
+
+                user_id = :uid
+
+            AND
+
+                device_id = :device
+
+            """),
+
+            {
+
+                "uid": user_id,
+
+                "device": device_id
+
+            }
+
+        )
+
+        db.commit()
+
+        return True
+
+    except Exception as e:
+
+        logger.error(f"Offline Error: {e}")
+
+        db.rollback()
+
+        return False
+
+
+# ==========================================================
+# GET USER STATUS
+# ==========================================================
+
+def get_user_presence(
+
+    db: Session,
+
+    user_id: int
+
+):
+
+    try:
+
+        row = db.execute(
+
+            text("""
+
+            SELECT
+
+                is_online,
+
+                last_seen
+
+            FROM user_presence
+
+            WHERE
+
+                user_id = :uid
+
+            ORDER BY last_seen DESC
+
+            LIMIT 1
+
+            """),
+
+            {
+
+                "uid": user_id
+
+            }
+
+        ).fetchone()
+
+        if row is None:
+
+            return {
+
+                "online": False,
+
+                "last_seen": None
+
+            }
+
+        return {
+
+            "online": row.is_online,
+
+            "last_seen": row.last_seen
+
+        }
+
+    except Exception as e:
+
+        logger.error(f"Presence Error: {e}")
+
+        return {
+
+            "online": False,
+
+            "last_seen": None
+
+        }
+
+
+# ==========================================================
+# ACTIVE DEVICES
+# ==========================================================
+
+def get_active_devices(
+
+    db: Session,
+
+    user_id: int
+
+):
+
+    try:
+
+        rows = db.execute(
+
+            text("""
+
+            SELECT
+
+                device_id,
+
+                ip_address,
+
+                last_seen,
+
+                is_online
+
+            FROM user_presence
+
+            WHERE
+
+                user_id = :uid
+
+            ORDER BY last_seen DESC
+
+            """),
+
+            {
+
+                "uid": user_id
+
+            }
+
+        ).fetchall()
+
+        return rows
+
+    except Exception as e:
+
+        logger.error(f"Device List Error: {e}")
+
+        return []
